@@ -43,6 +43,8 @@ class App(ActionsMixin):
         self._polling = False
         self._calc_jobs = {}
         self._last_refresh = ""
+        self._avisos = []
+        self._aviso_abierto = False
 
         key, secret = creds.load(EXCHANGE)
         self.mx = Mexc(key, secret)
@@ -152,7 +154,7 @@ class App(ActionsMixin):
             self.root,
             fg_color="transparent",
             orientation="horizontal",
-            height=500,
+            height=450,
             scrollbar_button_color=t.INPUT,
             scrollbar_button_hover_color=t.BORDER,
         )
@@ -266,10 +268,18 @@ class App(ActionsMixin):
             pass
 
     # ------------------------------------------------------------------ tarjetas
+    def _contract_for(self, symbol):
+        """Contrato del par: catalogo o cache. Sin red."""
+        return self._markets.get(symbol) or self.mx.cached_contract(symbol) or {}
+
     def _name_for(self, symbol):
         """Nombre del par como en MEXC. Sin red: catalogo o cache de contratos."""
-        contract = self._markets.get(symbol) or self.mx.cached_contract(symbol)
+        contract = self._contract_for(symbol)
         return display_name(contract) if contract else symbol
+
+    def _scale_for(self, symbol):
+        """Decimales del precio que admite el contrato (priceScale)."""
+        return int(self._contract_for(symbol).get("priceScale") or 2)
 
     def _add_card(self, symbol, cfg=None):
         cfg = cfg or {}
@@ -283,6 +293,7 @@ class App(ActionsMixin):
             on_change=self._schedule_calc,
         )
         card.set_name(self._name_for(symbol))
+        card.set_scale(self._scale_for(symbol))
         card.pack(side="left", padx=(0, 10), pady=2, anchor="n")
         self.cards.append(card)
         self._schedule_calc(card)
@@ -336,6 +347,7 @@ class App(ActionsMixin):
     def _set_card_symbol(self, card, symbol):
         card.set_symbol(symbol)
         card.set_name(self._name_for(symbol))
+        card.set_scale(self._scale_for(symbol))
         self._save_config()
 
     # -------------------------------------------------------------------- datos
@@ -453,7 +465,8 @@ class App(ActionsMixin):
     def _calc_worker(self, card, form):
         try:
             symbol = form["symbol"]
-            px = self._prices.get(symbol)
+            # con orden limite el tamaño se convierte al precio limite, no al de mercado
+            px = form.get("price") or self._prices.get(symbol)
             if not px:
                 # nunca tocar widgets desde un hilo: Tk se bloquea varios segundos
                 self.q.put(("preview", (card, "esperando precio…")))
@@ -478,9 +491,11 @@ class App(ActionsMixin):
     # ------------------------------------------------------------------- drain
     def _drain(self):
         started = time.perf_counter()
+        hechos = []
         try:
             while True:
                 kind, payload = self.q.get_nowait()
+                hechos.append(kind)
                 if kind == "ticker":
                     symbol, price, change = payload
                     self._prices[symbol] = price
@@ -505,6 +520,7 @@ class App(ActionsMixin):
                     self._markets = payload
                     for card in self.cards:
                         card.set_name(self._name_for(card.symbol))
+                        card.set_scale(self._scale_for(card.symbol))
                 elif kind == "open_search":
                     SearchPopup(self.root, self._markets, payload)
                 elif kind == "preview":
@@ -517,14 +533,30 @@ class App(ActionsMixin):
                 elif kind == "closed":
                     self._status(payload)
                 elif kind == "notice":
-                    title, text, danger = payload
-                    dialog.show(self.root, title, text, danger=danger)
+                    self._notice(*payload)
         except queue.Empty:
             pass
         spent = time.perf_counter() - started
         if spent > 0.2:
-            self._perf(f"drain {spent * 1000:.0f} ms")
+            # que mensajes lo causaron: sin esto el log dice cuanto, no por que
+            como = ", ".join(dict.fromkeys(hechos)) or "vacio"
+            self._perf(f"drain {spent * 1000:.0f} ms · {como}")
         self.root.after(120, self._drain)
+
+    def _notice(self, title, text, danger=False):
+        """Avisos uno por vez y fuera de `_drain`: un modal abierto no encola la UI."""
+        self._avisos.append((title, text, danger))
+        if not self._aviso_abierto:
+            self._next_notice()
+
+    def _next_notice(self):
+        if not self._avisos:
+            self._aviso_abierto = False
+            return
+        self._aviso_abierto = True
+        title, text, danger = self._avisos.pop(0)
+        dialog.show(self.root, title, text, danger=danger)
+        self.root.after_idle(self._next_notice)
 
     def _perf(self, msg):
         """Registra callbacks lentos de la UI: si algo bloquea, queda la prueba."""
@@ -570,21 +602,27 @@ class App(ActionsMixin):
                 "positivos, y TP/SL vacios o numericos.",
             )
             return
-        px = self._prices.get(form["symbol"], 0)
+        price = form.get("price")
+        px = price or self._prices.get(form["symbol"], 0)
+        exact = t.fmt_price_exact(px, self._scale_for(form["symbol"]))
         dry = bool(self.var_dry.get())
         rows = [
             ("Par", form["symbol"]),
-            ("Precio", t.fmt_price(px)),
+            ("Tipo", f"Límite {exact}" if price else "Mercado"),
+            ("Precio", exact if price else t.fmt_price(px)),
             ("Tamaño", f"{form['size']:,.2f} USDT ({form['size_mode']})"),
             ("Nocional", f"{form['notional']:,.2f} USDT"),
             ("Apalancamiento", f"{form['lev']}x ({form['margin_mode']})"),
             ("TP / SL", f"{form['tp'] or '—'} / {form['sl'] or '—'}"),
         ]
+        warn = "DRY-RUN: no se enviara nada." if dry else "ESTO ES REAL"
+        if price:
+            warn += "\nOrden límite: puede quedar sin llenar."
         if not dialog.confirm(
             self.root,
             f"Confirmar {side}",
             rows=rows,
-            warn="DRY-RUN: no se enviara nada." if dry else "ESTO ES REAL",
+            warn=warn,
             danger=not dry,
             ok_text=side,
         ):
@@ -594,8 +632,9 @@ class App(ActionsMixin):
 
     def _do_trade(self, card, side, form, dry):
         try:
+            precio = form.get("price")
             if dry:
-                px = self.mx.price(form["symbol"])
+                px = precio or self.mx.price(form["symbol"])
                 vol = self.mx.size_to_vol(form["symbol"], form["notional"], px)
                 self.q.put(
                     (
@@ -617,6 +656,7 @@ class App(ActionsMixin):
                 form["open_type"],
                 form["tp"],
                 form["sl"],
+                precio,
             )
             order_id = (data or {}).get("orderId", "?")
             self.q.put(
@@ -638,15 +678,14 @@ class App(ActionsMixin):
         self._status(msg)
         self._log(("OK  " if ok else "ERR ") + msg)
         if not ok:
-            dialog.show(self.root, "Orden rechazada", msg, danger=True)
+            self._notice("Orden rechazada", msg, danger=True)
         elif msg.startswith("DRY-RUN"):
-            dialog.show(
-                self.root,
+            self._notice(
                 "DRY-RUN: no se envio nada",
                 msg + "\n\nApaga DRY-RUN para operar de verdad.",
             )
         else:
-            dialog.show(self.root, "Orden enviada", msg)
+            self._notice("Orden enviada", msg)
             threading.Thread(target=self._refresh_positions, daemon=True).start()
 
     # --------------------------------------------------------------------- key

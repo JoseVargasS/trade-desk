@@ -38,6 +38,23 @@ def test_abrir_short_con_tp_sl(mx):
     assert payload["profitTrend"] == 1 and payload["lossTrend"] == 1
 
 
+def test_abrir_con_precio_es_orden_limite(mx):
+    mx.open_market("XAU_USDT", "LONG", 100, 10, price=110.004)
+
+    payload = mx.sent[-1][1]
+    assert payload["type"] == 1, "1 = limite"
+    assert payload["price"] == 110.0, "precio redondeado al priceScale del contrato"
+    assert payload["vol"] == 909.0, "el tamaño se convierte con el precio limite"
+
+
+def test_abrir_a_mercado_ignora_un_precio_vacio(mx):
+    mx.open_market("XAU_USDT", "LONG", 100, 10, price=None)
+
+    payload = mx.sent[-1][1]
+    assert payload["type"] == 5
+    assert payload["price"] == 100.0, "precio de mercado"
+
+
 def test_cerrar_todo_a_mercado(mx, posicion):
     mx.close_position(posicion)
 

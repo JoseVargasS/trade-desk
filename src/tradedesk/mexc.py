@@ -303,16 +303,29 @@ class Mexc:
     def assets(self):
         return self._get("/api/v1/private/account/assets") or []
 
-    def open_market(self, symbol, side, notional_usdt, leverage, open_type=1, tp=None, sl=None):
-        """side: 'LONG' o 'SHORT'. notional_usdt = margen * apalancamiento."""
-        px = self.price(symbol)
+    def open_market(
+        self, symbol, side, notional_usdt, leverage, open_type=1, tp=None, sl=None, price=None
+    ):
+        """side: 'LONG' o 'SHORT'. notional_usdt = margen * apalancamiento.
+
+        `price` vacio = a mercado (type 5) con el ultimo precio. Con precio =
+        orden limite (type 1) a ese nivel; el tamano se convierte con ese precio,
+        no con el de mercado.
+        """
+        if price:
+            scale = int(self.contract(symbol).get("priceScale") or 0)
+            px = round(float(price), scale)
+            order_type = 1
+        else:
+            px = self.price(symbol)
+            order_type = 5
         vol = self.size_to_vol(symbol, notional_usdt, px)
         payload = {
             "symbol": symbol,
             "price": px,
             "vol": vol,
             "side": 1 if side == "LONG" else 3,  # 1 abre long / 3 abre short
-            "type": 5,  # 5 = mercado
+            "type": order_type,
             "openType": int(open_type),  # 1 aislado / 2 cruzado
             "leverage": int(leverage),
             "externalOid": uuid.uuid4().hex[:24],  # idempotencia: un reintento no duplica

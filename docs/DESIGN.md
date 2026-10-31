@@ -73,7 +73,7 @@ Semánticos:
 | Cambio 24h | Geist | 12 |
 | Etiqueta | Geist | 10–13 |
 | Input de tamaño | Geist bold | 15 |
-| Tabla | Geist | 13 (negrita en Mark, Posición, PnL, Par, Lado) |
+| Tabla | Geist | 13 (negrita en Mark price, Posición, PnL, Par, Lado) |
 | Botón principal | Geist bold | 14–16 |
 
 ---
@@ -82,7 +82,8 @@ Semánticos:
 
 - Radios: `R_CHIP = 6`, `R_CTRL = 8`, `R_CARD = 12`.
 - Padding interno de tarjeta: 12 px. Padding de ventana: 16 px.
-- Tarjeta de operación: **286 px de ancho, 486 px de alto** (fija).
+- Tarjeta de operación: **286 px de ancho, 436 px de alto** (fija). `LONG` y `SHORT` van en
+  la misma fila; apilados costaban 40 px que ahora usa la tabla.
 - Filas de tabla: **56 px** (posiciones: PnL en dos líneas, fee en tres y la barra de
   cierre en dos de 22/26 px, todo centrado verticalmente sin tocar los bordes) y 38 px
   (historial). Cabecera: 36 px.
@@ -113,7 +114,7 @@ Semánticos:
 | `Lado` | `10X LONG` verde / `5X SHORT` rojo (apalancamiento incluido) |
 | `Apertura` | `dd/mm hh:mm` en `MUTED`, de `createTime` de `open_positions` |
 | `Posición` | nocional con su unidad: `4,990.76 USDT`, bold |
-| `Entrada`, `Mark` | precio; Mark verde/rojo contra la entrada |
+| `Entrada`, `Mark price` | precio; Mark price verde/rojo contra la entrada |
 | `Liquidación` | precio en `GOLD` |
 | `Margin ratio` | `0.50%`; `GOLD` desde 20 %. La cabecera dice **Margin ratio**, no `Margen %` |
 | `Margen` | `500.69 USDT` bold + lápiz; la unidad va en el valor, no en la cabecera |
@@ -166,7 +167,7 @@ no se muestra en la fila: se deduce del lápiz de margen, que aparece deshabilit
 
 | Función | Salida | Uso |
 |---|---|---|
-| `fmt_price` | `78,549.5` / `2,239.10` / `0.90560` | precios, mark, liquidación |
+| `fmt_price` | `78,549.5` / `2,239.10` / `0.90560` | precios, mark price, liquidación |
 | `fmt_price_exact` | `2,246.39` | precio con los decimales del contrato (`priceScale`): en una orden límite lo que se ve es lo que se envía |
 | `fmt_pnl` | `+12.4021` / `-3.1502` | PnL, signo siempre, 4 decimales |
 | `fmt_fee` | `0.1997` | comisiones, 4 decimales |
@@ -182,7 +183,7 @@ Reglas de color en tablas:
 |---|---|
 | PnL | `> 0` verde · `< 0` rojo · `= 0` gris |
 | Fee | `> 0` rojo (costo) · `< 0` verde (rebate) · `= 0` gris |
-| Mark | verde si va ganando vs entrada, rojo si perdiendo, gris si falta |
+| Mark price | verde si va ganando vs entrada, rojo si perdiendo, gris si falta |
 | Lado | LONG verde · SHORT rojo |
 | Estado (historial) | Ejecutada verde · resto gris |
 

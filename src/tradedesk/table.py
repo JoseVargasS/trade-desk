@@ -19,7 +19,7 @@ POS_COLS = (
     ("apertura", "Apertura", 84, "w"),
     ("pos", "Posición", 112, "e"),
     ("entrada", "Entrada", 94, "e"),
-    ("mark", "Mark", 94, "e"),
+    ("mark", "Mark price", 94, "e"),
     ("liq", "Liquidación", 100, "e"),
     ("ratio", "Margin ratio", 98, "e"),
     ("margen", "Margen", 132, "e"),

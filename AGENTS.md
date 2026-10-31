@@ -99,7 +99,7 @@ raiz/
     paths.py                DATA_DIR (raiz) y ASSETS (paquete)             13
     app.py                  ventana, estado, pollers, preview             690
     actions.py              cerrar, reverse, TP/SL, margen (mixin)        260
-    cards.py                TradeCard: una tarjeta por par                 341
+    cards.py                TradeCard: una tarjeta por par                 346
     closebar.py             precio + % de cierre + botones de la fila     381
     table.py                PositionsTable + HistoryTable                 544
     search.py               SearchPopup + filter_markets()                209

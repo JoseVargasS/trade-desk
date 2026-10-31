@@ -167,12 +167,18 @@ class _PercentPopup(_Popup):
         )
 
 
-class _PricePopup(_Popup):
-    """Mercado o precio limite, en el mismo campo."""
+class PricePopup(_Popup):
+    """Mercado o un precio limite: entrega el precio elegido (None = mercado).
 
-    def __init__(self, bar):
-        super().__init__(bar.price_btn, 236)
-        self.bar = bar
+    Lo usan la barra de cierre (por fila) y la tarjeta de apertura.
+    """
+
+    def __init__(self, anchor, mark, scale, current, on_pick):
+        super().__init__(anchor, 236)
+        self.mark = float(mark or 0)
+        self.scale = int(scale or 0)
+        self.current = current
+        self.on_pick = on_pick
         self.seg = ctk.CTkSegmentedButton(
             self.wrap,
             values=["Mercado", "Límite"],
@@ -189,7 +195,7 @@ class _PricePopup(_Popup):
         )
         self.seg.pack(fill="x", padx=12, pady=(10, 8))
 
-        self.var = ctk.StringVar(value=t.fmt_price_exact(bar.limit_price or bar.mark, bar.scale))
+        self.var = ctk.StringVar(value=t.fmt_price_exact(current or self.mark, self.scale))
         self.entry = ctk.CTkEntry(
             self.wrap,
             textvariable=self.var,
@@ -218,13 +224,13 @@ class _PricePopup(_Popup):
         ).pack(anchor="e", padx=12, pady=(8, 10))
         self.entry.bind("<Return>", lambda e: self._apply())
 
-        self.seg.set("Límite" if bar.limit_price else "Mercado")
+        self.seg.set("Límite" if current else "Mercado")
         self._mode(self.seg.get())
         self.show()
 
     def _mode(self, value):
         if value == "Límite":
-            self.var.set(t.fmt_price_exact(self.bar.limit_price or self.bar.mark, self.bar.scale))
+            self.var.set(t.fmt_price_exact(self.current or self.mark, self.scale))
             self.entry.configure(state="normal", text_color=t.TEXT)
             self.entry.focus_set()
             self.entry.select_range(0, "end")
@@ -233,7 +239,7 @@ class _PricePopup(_Popup):
 
     def _apply(self):
         if self.seg.get() == "Mercado":
-            self.bar.set_price(None)
+            self.on_pick(None)
             self.destroy()
             return
         try:
@@ -241,9 +247,9 @@ class _PricePopup(_Popup):
         except ValueError:
             price = 0.0
         if price <= 0:
-            self.var.set(t.fmt_price_exact(self.bar.mark, self.bar.scale))
+            self.var.set(t.fmt_price_exact(self.mark, self.scale))
             return
-        self.bar.set_price(price)
+        self.on_pick(price)
         self.destroy()
 
 
@@ -375,7 +381,7 @@ class CloseBar(ctk.CTkFrame):
         _PercentPopup(self)
 
     def _open_price(self):
-        _PricePopup(self)
+        PricePopup(self.price_btn, self.mark, self.scale, self.limit_price, self.set_price)
 
     def _close(self):
         self.on_close({"pct": self.pct, "price": self.limit_price})

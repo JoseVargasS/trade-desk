@@ -114,6 +114,67 @@ def test_cantidad_y_precio_se_normalizan(ventana, posicion):
 
 
 @pytest.mark.ui
+def test_la_tarjeta_no_se_corta_y_los_botones_van_en_una_fila(ventana):
+    from tradedesk.cards import TradeCard
+
+    tarjeta = TradeCard(
+        ventana,
+        "XAU_USDT",
+        {"leverage": 10},
+        on_remove=lambda c: None,
+        on_symbol=lambda c: None,
+        on_trade=lambda c, s: None,
+        on_change=lambda c: None,
+    )
+    tarjeta.pack()
+    tarjeta.set_price(3660.3, 1.2)
+    tarjeta.set_preview("22 contratos · 80.53 USDT\nfee 0.1996 · liq 3,611.8 / 3,712.0")
+    ventana.update()
+
+    fin = max(w.winfo_y() + w.winfo_height() for w in tarjeta.winfo_children())
+    assert fin <= tarjeta.winfo_height(), "la tarjeta corta contenido"
+    assert tarjeta.btn_long.winfo_y() == tarjeta.btn_short.winfo_y(), "LONG y SHORT apilados"
+    assert abs(tarjeta.btn_long.winfo_width() - tarjeta.btn_short.winfo_width()) <= 1
+
+
+@pytest.mark.ui
+def test_la_tarjeta_elige_mercado_o_limite(ventana):
+    from tradedesk.cards import TradeCard
+
+    tarjeta = TradeCard(
+        ventana,
+        "XAU_USDT",
+        {"leverage": 10},
+        on_remove=lambda c: None,
+        on_symbol=lambda c: None,
+        on_trade=lambda c, s: None,
+        on_change=lambda c: None,
+    )
+    tarjeta.pack()
+    tarjeta.set_price(2243.3, 0.7)
+    tarjeta.set_scale(2)
+    tarjeta.var_size.set("10")
+    ventana.update()
+
+    assert tarjeta.form()["price"] is None, "por defecto a mercado"
+    assert tarjeta.btn_order.cget("text") == "Mercado"
+
+    tarjeta.set_limit_price(2246.394)
+    assert tarjeta.form()["price"] == 2246.394
+    assert tarjeta.btn_order.cget("text") == "2,246.39", "se muestra como se envia"
+
+    tarjeta.set_limit_price(None)
+    assert tarjeta.form()["price"] is None
+    assert tarjeta.btn_order.cget("text") == "Mercado"
+
+    tarjeta.set_limit_price(2246.394)
+    tarjeta.set_symbol("ETH_USDT")
+    ventana.update()
+    assert tarjeta.form()["price"] is None, "cambiar de par vuelve a mercado"
+    assert tarjeta.btn_order.cget("text") == "Mercado"
+
+
+@pytest.mark.ui
 def test_los_popups_abren_y_escriben_en_la_fila(ventana, posicion):
     from tradedesk import closebar
 
@@ -128,7 +189,9 @@ def test_los_popups_abren_y_escriben_en_la_fila(ventana, posicion):
     assert barra.pct == 60
     popup.destroy()
 
-    precio = closebar._PricePopup(barra)
+    precio = closebar.PricePopup(
+        barra.price_btn, barra.mark, barra.scale, barra.limit_price, barra.set_price
+    )
     ventana.update()
     assert precio.seg.get() == "Mercado"
     precio.seg.set("Límite")

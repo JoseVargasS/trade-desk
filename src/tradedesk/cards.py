@@ -5,9 +5,11 @@ import tkinter as tk
 import customtkinter as ctk
 
 from . import theme as t
+from .closebar import PricePopup
 
 PRESETS = (1, 5, 10, 15, 20, 50)
 WIDTH = 286
+HEIGHT = 436  # LONG y SHORT en una sola fila: 40 px menos que apilados
 
 
 class TradeCard(ctk.CTkFrame):
@@ -19,13 +21,16 @@ class TradeCard(ctk.CTkFrame):
             border_width=1,
             border_color=t.LINE,
             width=WIDTH,
-            height=486,
+            height=HEIGHT,
         )
         self.grid_propagate(False)
         self.grid_columnconfigure(0, weight=1)
         # el simbolo crudo es el que opera; el boton muestra el nombre de MEXC
         self._symbol = symbol
         self._lev_lock = False
+        self.limit_price = None  # None = a mercado; numero = orden limite
+        self._mark = 0.0
+        self._scale = 2
         self.on_remove = on_remove
         self.on_symbol = on_symbol
         self.on_trade = on_trade
@@ -161,9 +166,26 @@ class TradeCard(ctk.CTkFrame):
         size.grid(row=row, column=0, sticky="ew", pady=(10, 0), **pad)
         size.grid_columnconfigure(0, weight=1)
 
+        head_size = ctk.CTkFrame(size, fg_color="transparent")
+        head_size.grid(row=0, column=0, sticky="ew", columnspan=2, pady=(0, 2))
         ctk.CTkLabel(
-            size, text="Tamaño (USDT)", font=(t.UI, 10), text_color=t.MUTED, anchor="w"
-        ).grid(row=0, column=0, sticky="w", columnspan=2, pady=(0, 2))
+            head_size, text="Tamaño (USDT)", font=(t.UI, 10), text_color=t.MUTED, anchor="w"
+        ).pack(side="left")
+        self.btn_order = ctk.CTkButton(
+            head_size,
+            text="Mercado",
+            width=84,
+            height=20,
+            corner_radius=t.R_CHIP,
+            fg_color=t.INPUT,
+            hover_color=t.BORDER,
+            border_width=1,
+            border_color=t.BORDER,
+            text_color=t.MUTED,
+            font=(t.UI, 10),
+            command=self._pick_order_price,
+        )
+        self.btn_order.pack(side="right")
         self.var_size = tk.StringVar(value="")
         ctk.CTkEntry(
             size,
@@ -212,31 +234,35 @@ class TradeCard(ctk.CTkFrame):
         self.lbl_calc.grid(row=row, column=0, sticky="ew", pady=(8, 0), **pad)
         row += 1
 
+        trade = ctk.CTkFrame(self, fg_color="transparent")
+        trade.grid(row=row, column=0, sticky="ew", pady=(10, 12), **pad)
+        trade.grid_columnconfigure(0, weight=1, uniform="trade")
+        trade.grid_columnconfigure(1, weight=1, uniform="trade")
+
         self.btn_long = ctk.CTkButton(
-            self,
+            trade,
             text="LONG",
             height=34,
             corner_radius=t.R_CTRL,
             fg_color=t.GREEN,
-            hover_color="#18B374",
-            text_color="#04140D",
+            hover_color=t.GREEN_HOVER,
+            text_color=t.ON_GREEN,
             font=(t.UI, 14, "bold"),
             command=lambda: self.on_trade(self, "LONG"),
         )
-        self.btn_long.grid(row=row, column=0, sticky="ew", pady=(10, 0), **pad)
-        row += 1
+        self.btn_long.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         self.btn_short = ctk.CTkButton(
-            self,
+            trade,
             text="SHORT",
             height=34,
             corner_radius=t.R_CTRL,
             fg_color=t.RED,
-            hover_color="#E03A50",
-            text_color="#150508",
+            hover_color=t.RED_HOVER,
+            text_color=t.ON_RED,
             font=(t.UI, 14, "bold"),
             command=lambda: self.on_trade(self, "SHORT"),
         )
-        self.btn_short.grid(row=row, column=0, sticky="ew", pady=(6, 12), **pad)
+        self.btn_short.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         self.var_lev.trace_add("write", lambda *_: self._changed())
         self.var_size.trace_add("write", lambda *_: self._changed())
@@ -286,24 +312,53 @@ class TradeCard(ctk.CTkFrame):
             "open_type": 1 if self.var_margin.get() == "Aislado" else 2,
             "margin_mode": self.var_margin.get(),
             "size_mode": self.var_mode.get(),
+            "price": self.limit_price,
         }
 
     def set_symbol(self, symbol):
         self._symbol = symbol
+        self._mark = 0.0
         self.btn_symbol.configure(text=symbol)
         self.lbl_price.configure(text="—")
         self.lbl_change.configure(text="")
+        self.set_limit_price(None)
         self._changed()
 
     def set_name(self, name):
         """Nombre tal como lo muestra MEXC: GOLD(XAU)USDT."""
         self.btn_symbol.configure(text=name or self._symbol)
 
+    def set_scale(self, scale):
+        """Decimales del contrato (priceScale) para mostrar el precio limite."""
+        self._scale = int(scale or 0)
+        if self.limit_price:
+            self.set_limit_price(self.limit_price)
+
     def set_price(self, price, change):
+        self._mark = float(price or 0)
         self.lbl_price.configure(text=t.fmt_price(price))
         self.lbl_change.configure(
             text=t.fmt_pct(change), text_color=t.GREEN if change >= 0 else t.RED
         )
+
+    def set_limit_price(self, price):
+        """None = a mercado. Numero = orden limite a ese precio."""
+        self.limit_price = float(price) if price else None
+        if self.limit_price:
+            self.btn_order.configure(
+                text=t.fmt_price_exact(self.limit_price, self._scale), text_color=t.TEXT
+            )
+        else:
+            self.btn_order.configure(text="Mercado", text_color=t.MUTED)
+
+    def _pick_order_price(self):
+        PricePopup(
+            self.btn_order, self._mark, self._scale, self.limit_price, self._set_limit_and_refresh
+        )
+
+    def _set_limit_and_refresh(self, price):
+        self.set_limit_price(price)
+        self._changed()
 
     def set_preview(self, text):
         self.lbl_calc.configure(text=text)
