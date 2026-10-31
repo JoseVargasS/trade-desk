@@ -1,15 +1,13 @@
 """trade-desk: ventana local para operar futuros de MEXC a mercado.
 
-Tarjetas de par en fila + tabla de posiciones e historial.
+Estado, pollers y acciones; los widgets los arma `ui.build_ui`.
 Sin servidor web, sin puertos abiertos.
 """
 
 import json
-import os
 import queue
 import threading
 import time
-import tkinter as tk
 from datetime import datetime
 
 import customtkinter as ctk
@@ -19,10 +17,10 @@ from . import creds, dialog
 from . import theme as t
 from .actions import ActionsMixin
 from .cards import TradeCard
-from .mexc import Mexc, decorate_positions, display_name
-from .paths import ASSETS, DATA_DIR
+from .mexc import Mexc, decorate_orders, decorate_positions, display_name
+from .paths import DATA_DIR
 from .search import SearchPopup
-from .table import HistoryTable, PositionsTable
+from .ui import build_ui
 
 EXCHANGE = "mexc"
 CONFIG_PATH = str(DATA_DIR / "config.json")
@@ -43,6 +41,7 @@ class App(ActionsMixin):
         self._polling = False
         self._calc_jobs = {}
         self._last_refresh = ""
+        self._count_orders = 0
         self._avisos = []
         self._aviso_abierto = False
 
@@ -51,7 +50,7 @@ class App(ActionsMixin):
         self._auth = bool(key and secret)
 
         t.resolve_fonts(root)
-        self._build_ui()
+        build_ui(self)
         self._restore_cards()
 
         self.root.after(120, self._drain)
@@ -85,187 +84,6 @@ class App(ActionsMixin):
             self._add_card(item.get("symbol", "BTC_USDT"), item)
         if not self.cards:
             self._status("Añade un par con «+ Añadir par»")
-
-    # ---------------------------------------------------------------------- ui
-    def _build_ui(self):
-        self.root.title("Trade Desk")
-        # 12 columnas en la tabla de posiciones + acciones: la fila mide 1700 px,
-        # asi que por debajo de 1760 se recorta en silencio (no hay scroll horizontal).
-        self.root.geometry("1800x1000")
-        self.root.minsize(1760, 860)
-        self.root.configure(fg_color=t.BG)
-        try:
-            self.root.iconbitmap(str(ASSETS / "icon.ico"))
-        except Exception:
-            pass
-        try:
-            self._icon = tk.PhotoImage(file=str(ASSETS / "icon.png"))
-            self.root.iconphoto(True, self._icon)
-        except Exception:
-            pass
-
-        header = ctk.CTkFrame(self.root, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(12, 8))
-
-        ctk.CTkLabel(header, text="Trade Desk", font=(t.UI, 18, "bold"), text_color=t.TEXT).pack(
-            side="left"
-        )
-        ctk.CTkLabel(
-            header,
-            text=" MEXC ",
-            font=(t.UI, 12, "bold"),
-            fg_color=t.INPUT,
-            corner_radius=t.R_CHIP,
-            text_color=t.GREEN,
-        ).pack(side="left", padx=(10, 14))
-
-        self.dot = ctk.CTkLabel(header, text="●", font=(t.UI, 15), text_color=t.MUTED)
-        self.dot.pack(side="left")
-
-        ctk.CTkButton(
-            header,
-            text="+  Añadir par",
-            width=132,
-            height=32,
-            corner_radius=t.R_CTRL,
-            fg_color=t.ACCENT_SOFT,
-            hover_color="#2E4E75",
-            text_color=t.TEXT,
-            font=(t.UI, 13, "bold"),
-            command=self._add_from_search,
-        ).pack(side="right")
-
-        self.lbl_ip = ctk.CTkLabel(header, text="IP …", font=(t.NUM, 12), text_color=t.MUTED)
-        self.lbl_ip.pack(side="right", padx=(0, 10))
-        ctk.CTkButton(
-            header,
-            text="IP",
-            width=30,
-            height=24,
-            corner_radius=t.R_CHIP,
-            fg_color=t.INPUT,
-            hover_color=t.BORDER,
-            text_color=t.MUTED,
-            font=(t.UI, 11),
-            command=self._copy_ip,
-        ).pack(side="right", padx=(0, 6))
-
-        self.deck = ctk.CTkScrollableFrame(
-            self.root,
-            fg_color="transparent",
-            orientation="horizontal",
-            height=450,
-            scrollbar_button_color=t.INPUT,
-            scrollbar_button_hover_color=t.BORDER,
-        )
-        self.deck.pack(fill="x", padx=16, pady=(0, 8))
-
-        status = ctk.CTkFrame(self.root, fg_color="transparent")
-        status.pack(side="bottom", fill="x", padx=16, pady=(4, 12))
-        self.var_dry = tk.BooleanVar(value=True)
-        ctk.CTkSwitch(
-            status,
-            text="DRY-RUN",
-            variable=self.var_dry,
-            onvalue=True,
-            offvalue=False,
-            font=(t.UI, 12),
-            text_color=t.MUTED,
-            progress_color=t.GOLD,
-            button_color=t.GOLD,
-            button_hover_color=t.GOLD,
-            width=104,
-            command=self._sync_dry,
-        ).pack(side="left")
-        self.lbl_dry = ctk.CTkLabel(status, text="", font=(t.UI, 12, "bold"), text_color=t.GOLD)
-        self.lbl_dry.pack(side="left", padx=12)
-        self.lbl_status = ctk.CTkLabel(status, text="Listo.", font=(t.UI, 12), text_color=t.MUTED)
-        self.lbl_status.pack(side="left", padx=8)
-        self.lbl_refresh = ctk.CTkLabel(status, text="", font=(t.NUM, 11), text_color=t.MUTED)
-        self.lbl_refresh.pack(side="right")
-        self._sync_dry()
-        self.root.after(30, self._dark_titlebar)
-
-        self.tabs = ctk.CTkTabview(
-            self.root,
-            fg_color=t.BG,
-            segmented_button_fg_color=t.INPUT,
-            segmented_button_selected_color=t.ACCENT_SOFT,
-            segmented_button_selected_hover_color=t.ACCENT_SOFT,
-            segmented_button_unselected_color=t.INPUT,
-            segmented_button_unselected_hover_color=t.BORDER,
-            text_color=t.TEXT,
-            corner_radius=t.R_CARD,
-            border_width=0,
-        )
-        self.tabs.pack(fill="both", expand=True, padx=16, pady=(0, 8))
-
-        tab_pos = self.tabs.add("Posiciones")
-        tab_his = self.tabs.add("Historial")
-        self.tabs.configure(command=self._on_tab)
-
-        self.lbl_count = ctk.CTkLabel(tab_pos, text="0", font=(t.UI, 13), text_color=t.MUTED)
-        self.lbl_count.pack(anchor="w", padx=4)
-
-        bar = ctk.CTkFrame(tab_pos, fg_color="transparent")
-        bar.pack(side="bottom", fill="x", pady=(4, 2))
-        self.btn_sel = ctk.CTkButton(
-            bar,
-            text="Cerrar seleccionadas",
-            width=180,
-            height=30,
-            corner_radius=t.R_CTRL,
-            fg_color=t.INPUT,
-            hover_color=t.BORDER,
-            text_color=t.TEXT,
-            font=(t.UI, 13),
-            command=self._close_selected,
-        )
-        self.btn_sel.pack(side="left")
-        ctk.CTkButton(
-            bar,
-            text="CERRAR TODO",
-            width=130,
-            height=30,
-            corner_radius=t.R_CTRL,
-            fg_color="#3A1A1E",
-            hover_color="#4A2226",
-            text_color=t.RED,
-            font=(t.UI, 13, "bold"),
-            command=self._close_all,
-        ).pack(side="right")
-
-        self.table = PositionsTable(
-            tab_pos,
-            on_close=self._close_position,
-            on_selection=self._sync_selection,
-            on_tpsl=self._edit_tpsl,
-            on_margin=self._add_margin,
-            on_reverse=self._reverse_position,
-        )
-        self.table.pack(fill="both", expand=True, pady=(2, 6))
-
-        self.history = HistoryTable(tab_his)
-        self.history.pack(fill="both", expand=True, pady=2)
-
-    def _dark_titlebar(self):
-        if os.name != "nt":
-            return
-        import ctypes
-
-        try:
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            value = ctypes.c_int(1)
-            for attr in (20, 19):
-                if (
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                        hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)
-                    )
-                    == 0
-                ):
-                    break
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------ tarjetas
     def _contract_for(self, symbol):
@@ -404,7 +222,8 @@ class App(ActionsMixin):
                 try:
                     positions = self._decorate(self.mx.positions())
                     self.q.put(("positions", positions))
-                    self.q.put(("orders", self.mx.open_orders()))
+                    orders = decorate_orders(self.mx, self.mx.open_orders())
+                    self.q.put(("orders", orders))
                 except Exception as e:
                     self.q.put(("status", f"posiciones: {e}"))
 
@@ -426,6 +245,13 @@ class App(ActionsMixin):
     def _on_tab(self):
         if self._history_visible() and self._auth:
             threading.Thread(target=self._load_history, daemon=True).start()
+        if self.tabs.get() == "Órdenes" and self._auth:
+            threading.Thread(target=self._refresh_orders, daemon=True).start()
+
+    def _go_orders(self):
+        """El aviso de pendientes lleva a la pestaña que las gestiona."""
+        if self._count_orders:
+            self.tabs.set("Órdenes")
 
     def _load_history(self):
         try:
@@ -512,6 +338,8 @@ class App(ActionsMixin):
                     self._render_positions(payload)
                 elif kind == "orders":
                     self._count_orders = len(payload)
+                    self.orders.render(payload)
+                    self._sync_pendientes()
                 elif kind == "history":
                     self.history.render(payload)
                 elif kind == "ip":
@@ -568,19 +396,22 @@ class App(ActionsMixin):
 
     def _render_positions(self, positions):
         self.table.render(positions)
-        count = len(positions)
-        extra = (
-            f" · {getattr(self, '_count_orders', 0)} ordenes pendientes"
-            if getattr(self, "_count_orders", 0)
-            else ""
-        )
-        self.lbl_count.configure(text=f"{count} abiertas{extra}")
         total = sum(float(p.get("unRealizedPnl") or 0) for p in positions)
+        self._sync_pendientes()
         self.lbl_refresh.configure(
             text=f"total {t.fmt_pnl(total)} · act. {datetime.now():%H:%M:%S}",
             text_color=t.GREEN if total >= 0 else t.RED,
         )
         self._sync_selection()
+
+    def _sync_pendientes(self):
+        pendientes = getattr(self, "_count_orders", 0)
+        extra = f" · {pendientes} pendientes" if pendientes else ""
+        self.lbl_count.configure(
+            text=f"{len(self.table.rows)} abiertas{extra}",
+            text_color=t.GOLD if pendientes else t.MUTED,
+            cursor="hand2" if pendientes else "arrow",
+        )
 
     def _sync_selection(self):
         count = self.table.checked_count()
@@ -687,6 +518,8 @@ class App(ActionsMixin):
         else:
             self._notice("Orden enviada", msg)
             threading.Thread(target=self._refresh_positions, daemon=True).start()
+            # una limite sin llenar no abre posicion: hay que refrescar ordenes
+            threading.Thread(target=self._refresh_orders, daemon=True).start()
 
     # --------------------------------------------------------------------- key
     def _ask_key(self):

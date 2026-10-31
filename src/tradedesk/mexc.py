@@ -123,6 +123,23 @@ def close_vol(hold_vol, pct):
     return float(math.floor(hold * pct / 100))
 
 
+def fee_desglose(position):
+    """Fee de la posicion como la muestra MEXC: comision cobrada + funding.
+
+    `totalFee` es la comision ya cobrada al abrir, `holdFee` el funding (MEXC lo
+    pinta en su propia linea) y `lowSaveTotalFee` lo ahorrado, que se muestra
+    pero **no** suma. El total es la suma de los dos primeros.
+    """
+    comision = abs(float(position.get("totalFee") or 0))
+    funding = abs(float(position.get("holdFee") or 0))
+    return {
+        "comision": comision,
+        "funding": funding,
+        "total": comision + funding,
+        "ahorro": float(position.get("lowSaveTotalFee") or 0),
+    }
+
+
 def decorate_positions(mx, positions):
     """Agrega a cada posicion lo que `open_positions` no devuelve: contrato,
     nombre de MEXC y el TP/SL vigente (que vive en otro endpoint)."""
@@ -150,6 +167,21 @@ def decorate_positions(mx, positions):
         p["_sl"] = float(stop.get("stopLossPrice") or 0) if stop else 0.0
         p["_tpsl_id"] = stop.get("id") if stop else None
     return positions
+
+
+def decorate_orders(mx, orders):
+    """Nombre, size y precision de cada orden abierta. Nunca pide red.
+
+    `open_orders` ya trae precio, cantidad y TP/SL; solo falta el contrato para
+    pasar contratos a USDT y para mostrar el precio con los decimales exactos
+    con los que se envio (priceScale).
+    """
+    for o in orders:
+        contract = mx.known_contract(o.get("symbol"))
+        o["_contractSize"] = float(contract.get("contractSize") or 0)
+        o["_priceScale"] = int(contract.get("priceScale") or 2)
+        o["_name"] = display_name(contract) if contract else o.get("symbol", "")
+    return orders
 
 
 class MexcError(Exception):
@@ -232,6 +264,10 @@ class Mexc:
         """Contrato ya pedido (sin red). Sirve para pintar el nombre del par."""
         return self._contracts.get(symbol)
 
+    def known_contract(self, symbol):
+        """Contrato del catalogo o del detalle ya cacheado. Nunca pide red."""
+        return (self._markets or {}).get(symbol) or self._contracts.get(symbol) or {}
+
     def markets(self, force=False):
         """Todos los contratos operables por API, indexados por simbolo.
 
@@ -258,9 +294,13 @@ class Mexc:
             return float(entry) * (1 - 1 / lev + mmr)
         return float(entry) * (1 + 1 / lev - mmr)
 
-    def size_to_vol(self, symbol, notional_usdt, price):
-        """USDT nocionales -> contratos, respetando el step del contrato."""
-        c = self.contract(symbol)
+    def size_to_vol(self, symbol, notional_usdt, price, contract=None):
+        """USDT nocionales -> contratos, respetando el step del contrato.
+
+        `contract` permite pasar el contrato ya cacheado: la UI lo usa para
+        previsualizar sin pedir nada a la red.
+        """
+        c = contract or self.contract(symbol)
         size = float(c["contractSize"])
         step = float(c.get("volUnit") or 1)
         min_vol = float(c.get("minVol") or step)
@@ -424,4 +464,13 @@ class Mexc:
         )
 
     def cancel(self, order_ids):
-        return self._post("/api/v1/private/order/cancel", {"orderIds": [int(i) for i in order_ids]})
+        """Cancela ordenes abiertas.
+
+        El body es un **array de ids sueltos**, no `{"orderIds": [...]}`: con el
+        objeto MEXC responde 600 Parameter error. Los ids van como texto para no
+        perder precision en el JSON (orderId tiene 18 digitos).
+        """
+        ids = [str(i) for i in order_ids if i]
+        if not ids:
+            return []
+        return self._post("/api/v1/private/order/cancel", ids)

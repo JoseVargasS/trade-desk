@@ -31,6 +31,10 @@ RED_HOVER = "#E03A50"
 ON_GREEN = "#04140D"
 ON_RED = "#150508"
 
+# acciones destructivas suaves: fondo vino, texto rojo (CERRAR TODO, cancelar)
+DANGER_SOFT = "#3A1A1E"
+DANGER_SOFT_HOVER = "#4A2226"
+
 GREEN_TINT = "#0F1A15"
 RED_TINT = "#1C1214"
 
@@ -52,6 +56,7 @@ _FALLBACK = {"Geist": "Segoe UI"}
 _loaded = False
 UI = "Geist"
 NUM = "Geist"  # numeros: Geist proporcional, ~19% mas angosto que Geist Mono
+SCALE = 1.0  # escala de CustomTkinter (DPI); la fija resolve_fonts
 
 
 def load_fonts():
@@ -68,12 +73,36 @@ def load_fonts():
 
 def resolve_fonts(root):
     """Debe llamarse despues de crear el Tk root."""
-    global UI, NUM
+    global UI, NUM, SCALE
     load_fonts()
     available = set(tkfont.families(root))
     UI = "Geist" if "Geist" in available else _FALLBACK["Geist"]
     NUM = UI
+    try:
+        SCALE = float(root._get_widget_scaling())
+    except Exception:
+        SCALE = 1.0
     return UI, NUM
+
+
+def _px(size):
+    """Tamano en pixeles, como CustomTkinter (size negativo = pixeles)."""
+    return -max(1, round(abs(size) * SCALE))
+
+
+def px(length):
+    """Largo en pixeles con la escala de CustomTkinter (anchos, altos)."""
+    return max(1, round(abs(length) * SCALE))
+
+
+def ui_font(size, bold=False):
+    """Fuente para widgets tk nativos (Label/Frame del sistema), en pixeles."""
+    return (UI, _px(size), "bold" if bold else "normal")
+
+
+def num_font(size, bold=False):
+    """Igual que ui_font, para numeros."""
+    return (NUM, _px(size), "bold" if bold else "normal")
 
 
 # ------------------------------------------------------------------- formatos

@@ -8,7 +8,8 @@ import time
 
 from . import dialog
 from . import theme as t
-from .mexc import MexcError, close_vol, plan_tp_sl
+from .mexc import MexcError, close_vol, decorate_orders, plan_tp_sl
+from .orders import edit_order, es_editable
 
 
 class ActionsMixin:
@@ -223,6 +224,159 @@ class ActionsMixin:
                 return True
             time.sleep(0.25)
         return False
+
+    # -------------------------------------------------------- ordenes abiertas
+    def _cancel_order(self, order):
+        """Cancelar una orden abierta. Es gestion de riesgo: pasa con DRY-RUN."""
+        side = int(order.get("side") or 0)
+        rows = [
+            ("Par", order.get("_name") or order.get("symbol")),
+            ("Lado", "LONG" if side in (1, 4) else "SHORT"),
+            ("Tipo", "Límite" if int(order.get("orderType") or 0) == 1 else "Mercado"),
+            ("Precio", t.fmt_price_exact(order.get("price"), order.get("_priceScale") or 2)),
+            ("Contratos", t.fmt_qty(order.get("vol"))),
+        ]
+        if not dialog.confirm(
+            self.root,
+            "Cancelar orden",
+            rows=rows,
+            warn="Deja de estar en el libro. Si se llenó mientras confirmabas,\n"
+            "ya no se puede cancelar: aparece como posición.",
+            danger=True,
+            ok_text="Cancelar orden",
+        ):
+            return
+        threading.Thread(
+            target=self._cancel_orders_worker, args=([order.get("orderId")],), daemon=True
+        ).start()
+
+    def _cancel_all_orders(self):
+        orders = self.orders.all()
+        if not orders:
+            self._status("No hay órdenes pendientes.")
+            return
+        rows = [
+            (
+                o.get("_name") or o.get("symbol"),
+                f"{t.fmt_price_exact(o.get('price'), o.get('_priceScale') or 2)} · "
+                f"{t.fmt_qty(o.get('vol'))} contratos",
+            )
+            for o in orders
+        ]
+        if not dialog.confirm(
+            self.root,
+            f"Cancelar {len(orders)} orden(es)",
+            rows=rows,
+            warn="Se cancelan TODAS las órdenes abiertas.",
+            danger=True,
+            ok_text="Cancelar todas",
+        ):
+            return
+        threading.Thread(
+            target=self._cancel_orders_worker,
+            args=([o.get("orderId") for o in orders],),
+            daemon=True,
+        ).start()
+
+    def _modify_order(self, order):
+        """Editar una orden. MEXC no deja modificarla: se cancela y se reenvía.
+
+        Reenviar es abrir una orden, así que DRY-RUN lo frena. La orden de cierre
+        (lado 2/4) no se puede reenviar así: solo cancelar.
+        """
+        if not es_editable(order):
+            self._status("Una orden de cierre solo se puede cancelar.")
+            return
+        if self.var_dry.get():
+            self._status("DRY-RUN: no se reenvía la orden modificada")
+            return
+        symbol = order.get("symbol")
+        contract = self._contract_for(symbol)
+        if not contract:
+            self._status(f"Falta el contrato de {symbol}: espera a que cargue el catálogo.")
+            return
+
+        def to_vol(notional, price):
+            # contrato ya cacheado: el editor no pide nada a la red
+            return self.mx.size_to_vol(symbol, notional, price, contract)
+
+        form = edit_order(self.root, order, contract, to_vol)
+        if not form:
+            return
+        threading.Thread(target=self._replace_order_worker, args=(order, form), daemon=True).start()
+
+    def _replace_order_worker(self, order, form):
+        symbol = order.get("symbol")
+        try:
+            self.mx.cancel([order["orderId"]])
+            # el cancel es asincrono: reenviar de inmediato puede tocar el margen
+            # que MEXC todavia tiene reservado para la orden vieja
+            if not self._wait_order_gone(order["orderId"]):
+                raise MexcError(
+                    "MEXC todavía no liberó la orden anterior. Reintenta en un segundo."
+                )
+            self.mx.open_market(
+                symbol,
+                form["side"],
+                form["notional"],
+                form["lev"],
+                int(order.get("openType") or 1),
+                form["tp"],
+                form["sl"],
+                form["price"],
+            )
+            self._log(
+                f"OK  reenviada {symbol} {form['side']} vol={form['vol']} "
+                f"px={form['price']} lev={form['lev']} mrg={form['margin']}"
+            )
+            self.q.put(("closed", f"Orden reenviada · {symbol}"))
+        except Exception as e:
+            self._log(f"ERR modificar {symbol}: {e}")
+            self.q.put(("closed", f"Error al modificar: {e}"))
+            self.q.put(
+                (
+                    "notice",
+                    (
+                        "No se pudo reenviar",
+                        f"{e}\n\nLa orden anterior ya se canceló: revisa la pestaña Órdenes.",
+                        True,
+                    ),
+                )
+            )
+        self._refresh_orders()
+
+    def _wait_order_gone(self, order_id, timeout=2.5):
+        """Espera a que la orden cancelada desaparezca de `open_orders`."""
+        fin = time.time() + timeout
+        while time.time() < fin:
+            try:
+                abiertas = self.mx.open_orders()
+            except Exception:
+                return False
+            if all(str(o.get("orderId")) != str(order_id) for o in abiertas):
+                return True
+            time.sleep(0.35)
+        return False
+
+    def _cancel_orders_worker(self, ids):
+        try:
+            self.mx.cancel(ids)
+            self._log(f"OK  cancel {len(ids)} orden(es) {ids}")
+            if len(ids) == 1:
+                self.q.put(("closed", "Orden cancelada"))
+            else:
+                self.q.put(("closed", f"{len(ids)} órdenes canceladas"))
+        except Exception as e:
+            self._log(f"ERR cancel {ids}: {e}")
+            self.q.put(("closed", f"Error al cancelar: {e}"))
+            self.q.put(("notice", ("No se pudo cancelar", str(e), True)))
+        self._refresh_orders()
+
+    def _refresh_orders(self):
+        try:
+            self.q.put(("orders", decorate_orders(self.mx, self.mx.open_orders())))
+        except Exception as e:
+            self.q.put(("status", f"ordenes: {e}"))
 
     # ---------------------------------------------------------------- margen
     def _add_margin(self, pos):

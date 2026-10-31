@@ -3,7 +3,14 @@
 import pytest
 
 from tests.fakes import FakeMexc
-from tradedesk.mexc import MexcError, close_vol, decorate_positions, display_name, plan_tp_sl
+from tradedesk.mexc import (
+    MexcError,
+    close_vol,
+    decorate_positions,
+    display_name,
+    fee_desglose,
+    plan_tp_sl,
+)
 
 
 def test_display_name_como_mexc():
@@ -76,3 +83,18 @@ def test_decorate_positions_aguanta_un_contrato_que_falla():
     assert pos["_priceScale"] == 2
     assert pos["_name"] == "BTC_USDT"
     assert pos["_tp"] == 0.0 and pos["_sl"] == 0.0 and pos["_tpsl_id"] is None
+
+
+def test_la_fee_es_comision_mas_funding():
+    """MEXC suma `totalFee` (comision) + `holdFee` (funding); el ahorro no suma."""
+    detalle = fee_desglose({"totalFee": 0.9993, "holdFee": -0.484, "lowSaveTotalFee": 1.7489})
+    assert detalle["comision"] == pytest.approx(0.9993)
+    assert detalle["funding"] == pytest.approx(0.484)
+    assert detalle["total"] == pytest.approx(1.4833)
+    assert detalle["ahorro"] == pytest.approx(1.7489), "el ahorro se muestra, no suma"
+
+
+def test_la_fee_aguanta_una_posicion_recien_abierta():
+    detalle = fee_desglose({"totalFee": 0.2})
+    assert (detalle["comision"], detalle["funding"], detalle["total"]) == (0.2, 0.0, 0.2)
+    assert detalle["ahorro"] == 0.0

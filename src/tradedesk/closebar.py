@@ -21,30 +21,55 @@ H_BTN = 26
 
 
 class _Popup(ctk.CTkToplevel):
-    """Panel chico pegado debajo del control que lo abre. Modal, Escape lo cierra."""
+    """Panel chico pegado debajo del control que lo abre.
 
-    def __init__(self, anchor, width):
-        super().__init__(anchor)
-        self.anchor = anchor
+    Sin `grab_set` a proposito: un grab local se traga el primer clic de afuera
+    (cerraba el panel pero el input que tocabas no recibia el clic ni el teclado,
+    y el foco quedaba en el chip). Se cierra con el primer clic dentro de la
+    ventana y ese clic igual llega a su destino.
+    """
+
+    def __init__(self, _ancla, width):
+        super().__init__(_ancla)
+        # ojo con los nombres: `_root`, `anchor` y `size` son metodos de tkinter
+        # (Misc._root, grid_anchor, grid_size). Pisarlos revienta la resolucion de
+        # eventos (%W -> nametowidget -> _root()) y cierra la app.
+        self._ancla = _ancla
+        self._ventana = _ancla.winfo_toplevel()
+        self._bind_clic = None
+        self._bind_esc = None
+        self._armar = None
+        self._cerrado = False
         self.overrideredirect(True)
         self.configure(fg_color=t.LINE)
-        self.transient(anchor.winfo_toplevel())
+        self.transient(self._ventana)
         self.wrap = ctk.CTkFrame(self, fg_color=t.CARD, corner_radius=t.R_CARD, width=width)
         self.wrap.pack(fill="both", expand=True, padx=1, pady=1)
         self.bind("<Escape>", lambda e: self.destroy())
         self.bind("<Button-1>", self._click_out)
-        self.grab_set()
+        # se arma con retraso: el clic que abre el panel no debe cerrarlo
+        self._armar = self.after(30, self._watch_clicks)
+
+    def _watch_clicks(self):
+        self._armar = None
+        if self._cerrado or self._bind_clic is not None:
+            return
+        self._bind_clic = self._ventana.bind("<Button-1>", self._click_away, add="+")
+        # Escape aunque el foco se haya quedado en la ventana grande
+        self._bind_esc = self._ventana.bind("<Escape>", self._click_away, add="+")
+
+    def _click_away(self, _event=None):
+        self.destroy()
 
     def _click_out(self, event):
-        # con grab, el clic fuera de la ventana llega al propio toplevel
         if event.widget in (self, self.wrap):
             self.destroy()
 
     def show(self):
         self.update_idletasks()
         try:
-            x = self.anchor.winfo_rootx()
-            y = self.anchor.winfo_rooty() + self.anchor.winfo_height() + 4
+            x = self._ancla.winfo_rootx()
+            y = self._ancla.winfo_rooty() + self._ancla.winfo_height() + 4
             w = self.winfo_reqwidth()
             if x + w > self.winfo_screenwidth() - 8:
                 x = self.winfo_screenwidth() - 8 - w
@@ -53,12 +78,56 @@ class _Popup(ctk.CTkToplevel):
         self.geometry(f"+{max(0, x)}+{y}")
         self.focus_force()
 
-    def destroy(self):
-        super().destroy()
+    def _tiene_foco(self):
+        """¿El panel (o un hijo) tiene el teclado? `focus_get` rompe con CTk."""
         try:
-            self.anchor.focus_set()
+            actual = str(self.tk.call("focus"))
         except Exception:
-            pass
+            return False
+        return bool(actual) and actual.startswith(self._w)
+
+    def destroy(self):
+        if self._cerrado:
+            return
+        self._cerrado = True
+        if self._armar is not None:
+            try:
+                self.after_cancel(self._armar)
+            except Exception:
+                pass
+            self._armar = None
+        if self._bind_clic is not None:
+            try:
+                self._ventana.unbind("<Button-1>", self._bind_clic)
+            except Exception:
+                pass
+            self._bind_clic = None
+        if self._bind_esc is not None:
+            try:
+                self._ventana.unbind("<Escape>", self._bind_esc)
+            except Exception:
+                pass
+            self._bind_esc = None
+        # el foco vuelve al chip solo si el panel todavia lo tenia; si se cerro
+        # por un clic afuera, manda ese clic
+        tenia_foco = self._tiene_foco()
+        super().destroy()
+        if tenia_foco:
+            # El panel se lleva el teclado con `focus_force` (si no, su caja de
+            # precio no recibe teclas). Al morir esa ventana, Tk se queda sin
+            # ventana con foco: `focus_set` sobre un widget de la ventana grande
+            # queda diferido para siempre y los inputs no reciben ni una tecla
+            # (se ve como "el campo esta deshabilitado"). Hay que devolverle el
+            # foco a la ventana con `focus_force`, igual que hace SearchPopup al
+            # cerrarse; con `focus_set` no alcanza.
+            try:
+                self._ventana.focus_force()
+            except Exception:
+                pass
+            try:
+                self._ancla.focus_set()
+            except Exception:
+                pass
 
 
 class _PercentPopup(_Popup):
@@ -156,7 +225,7 @@ class _PercentPopup(_Popup):
 
     def _render(self):
         pct = self.bar.pct
-        minimo = self.bar.unit * self.bar.size * self.bar.mark
+        minimo = self.bar.unit * self.bar.contract_size * self.bar.mark
         self.lines.configure(
             text=(
                 f"Cerrable: {t.fmt_fee(self.bar.notional)} USDT\n"
@@ -266,7 +335,7 @@ class CloseBar(ctk.CTkFrame):
         self.hold = 0.0
         self.notional = 0.0
         self.mark = 0.0
-        self.size = 0.0
+        self.contract_size = 0.0
         self.unit = 1.0
         self.scale = 2
 
@@ -338,7 +407,7 @@ class CloseBar(ctk.CTkFrame):
         """Datos frescos de la fila: no toca lo que el usuario ya eligio."""
         self.long = int(pos.get("positionType") or 1) == 1
         self.hold = float(pos.get("holdVol") or 0)
-        self.size = float(pos.get("_contractSize") or 0)
+        self.contract_size = float(pos.get("_contractSize") or 0)
         self.unit = float(pos.get("_volUnit") or 1)
         self.scale = int(pos.get("_priceScale") or 2)
         self.mark = float(mark or 0)

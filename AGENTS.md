@@ -21,7 +21,7 @@ el acceso directo, o la app deja de abrir con doble clic.
 
 ```powershell
 pip install -e ".[dev]"     # deps de la app + pytest/ruff/pre-commit
-python -m pytest            # 44 tests (~10 s); los `ui` se saltan sin ventana
+python -m pytest            # 70 tests (~20 s); los `ui` se saltan sin ventana
 python -m ruff check .      # lint
 python -m ruff format .     # formato (obligatorio: CI corre --check)
 scripts\check.bat           # lint + formato + tests de una
@@ -38,10 +38,14 @@ scripts\check.bat           # lint + formato + tests de una
   controles de la barra de cierre. Si se pasa, recorta columnas; no ensanches la ventana.
 - **Ruff mandó el formato**: los archivos ocupan ~15 % más líneas que antes (una llamada de
   Tkinter con muchos argumentos queda un argumento por línea). El tope real ahora es **~700
-  líneas**; `app.py` está cerca, así que lo siguiente que se le agregue va a un módulo nuevo.
-- Colores, fuentes y formatos numéricos **solo** en `theme.py`.
+  líneas**; `app.py` ya se partió en `ui.py` por eso: lo siguiente que se le agregue a la
+  ventana va a `ui.py`.
+- Colores, fuentes y formatos numéricos **solo** en `theme.py`. Los widgets de las tablas son
+  `tk.Label`/`tk.Frame` nativos (pintan ~3x más rápido que los CTk, que son Canvas aparte);
+  usan `theme.num_font` / `theme.ui_font`, que dan el tamaño en **píxeles** ya escalado.
 - Después de tocar UI: `python tools/smoke_live.py 9` (arranca 9 s, pinta las posiciones reales y
-  cierra sola; no envía órdenes).
+  cierra sola; no envía órdenes) y, si se tocaron tablas, `python tools/medir_repintado.py`
+  (mide lo que tarda la ventana en repintarse al restaurarla desde minimizada).
 - Antes de commitear: `scripts\check.bat` en verde.
 
 ---
@@ -83,11 +87,19 @@ Decisiones de fondo que **no** están en discusión:
    al 100 %**, con el mismo diálogo de siempre; un precio en el primer campo la vuelve orden
    **límite** (puede quedar sin llenar) y el `%` permite cerrar una parte. También:
    checkboxes + `Cerrar seleccionadas`, `Reverse` y `CERRAR TODO` (siempre a mercado).
-8. Pestaña **Historial**: últimas 50 órdenes (ejecutadas, canceladas, pendientes).
+8. Pestaña **Órdenes** (panel estilo MEXC): las límite que todavía no se llenaron, con par
+   (+`Perpetual` y el % llenado debajo), fecha, dirección (`Compra LONG` / `Venta SHORT`),
+   apalancamiento, monto, precio, llenado, margen usado, TP/SL en dos líneas, fee y estado.
+   Los **lápices** de Monto, Precio y TP/SL abren el editor (lado, apalancamiento, margen,
+   precio, TP y SL); en la columna de acciones están `Modificar` y `Cancelar`, y arriba a la
+   derecha `Cancelar todo`. El aviso `N pendientes` de la pestaña Posiciones lleva aquí.
+   Una orden límite no aparece en Posiciones hasta que se llena.
+9. Pestaña **Historial**: últimas 50 órdenes (ejecutadas, canceladas, pendientes).
 
 `DRY-RUN` viene **siempre encendido** en cada arranque y bloquea **abrir, cerrar y reverse**.
-El **TP/SL** y el **margen** sí funcionan con DRY-RUN activo: son gestión de riesgo, no
-abren exposición.
+El **TP/SL**, el **margen** y **cancelar órdenes** sí funcionan con DRY-RUN activo: son
+gestión de riesgo, no abren exposición. **Modificar** una orden sí queda bloqueado: reenviarla
+es abrir.
 
 ---
 
@@ -99,25 +111,28 @@ raiz/
   src/tradedesk/
     __main__.py             arranque: AppUserModelID + CTk + App            25
     paths.py                DATA_DIR (raiz) y ASSETS (paquete)             13
-    app.py                  ventana, estado, pollers, preview             690
-    actions.py              cerrar, reverse, TP/SL, margen (mixin)        260
-    cards.py                TradeCard: una tarjeta por par                 346
-    closebar.py             precio + % de cierre + botones de la fila     381
-    table.py                PositionsTable + HistoryTable                 544
+    app.py                  estado, pollers, preview, ordenes             562
+    ui.py                   arma la ventana: cabecera, tabs, tarjetas     210
+    actions.py              cerrar, reverse, TP/SL, margen, cancelar      414
+    cards.py                TradeCard: una tarjeta por par                 396
+    closebar.py             precio + % de cierre + botones de la fila     456
+    orders.py               tabla de ordenes estilo MEXC + editor           616
+    tooltip.py              numero con subrayado + detalle de fee         127
+    table.py                PositionsTable + HistoryTable                 594
     search.py               SearchPopup + filter_markets()                209
-    dialog.py               confirm / show / ask_key (sin messagebox)     376
-    theme.py                color, tipografia, radios, formatos           132
-    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   414
+    dialog.py               confirm / show / ask_key (sin messagebox)     394
+    theme.py                color, tipografia, radios, formatos           161
+    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   476
     creds.py                Windows Credential Manager                     29
     assets/                 icon.ico, icon.png, fonts/*.ttf
   tests/                    pytest: logica pura, payloads, UI (`-m ui`)
-  tools/                    make_icon, smoke_api, smoke_live, check_account
+  tools/                    make_icon, smoke_api, smoke_live, check_account, medir_repintado
   scripts/check.bat         lint + formato + tests
 ```
 
 Ningún archivo debe pasar de **~700 líneas** (el formato de ruff suma ~15 % al conteo).
-Si se cruza, se divide por responsabilidad. `app.py` está cerca: lo siguiente que se le
-agregue va a un módulo nuevo.
+Si se cruza, se divide por responsabilidad: `ui.py` salió de `app.py` y `orders.py` de
+`table.py` por eso mismo. Lo siguiente que se le agregue a la ventana va a `ui.py`.
 
 ### Flujo de datos
 
@@ -164,6 +179,7 @@ GET  /api/v1/contract/ticker                     todos los tickers (~250 KB, NO 
 GET  /api/v1/contract/detail?symbol=BTC_USDT     contrato individual (fuente autoritativa)
 GET  /api/v1/contract/detail                     catálogo completo (1.171 pares)
 POST /api/v1/private/order/create                abrir/cerrar (type=5 mercado, type=1 límite)
+POST /api/v1/private/order/cancel                body: [id, ...]  (array, NO {"orderIds": []})
 POST /api/v1/private/position/close_all
 POST /api/v1/private/position/reverse            reversible nativo
 POST /api/v1/private/position/change_margin      ADD/SUB, solo aislado
@@ -221,6 +237,12 @@ rechaza el duplicado en vez de abrir dos posiciones.
 distintos entre llamadas (se observó `0.0002` y `0.0004` en la misma sesión). Es una
 **estimación**, no un dato contable.
 
+La columna Fee de posiciones muestra **comisión + funding** (`mexc.fee_desglose`):
+`totalFee` es la comisión ya cobrada al abrir y `holdFee` el funding; `lowSaveTotalFee` es
+"Fees saved" y **no** suma. El importe lleva subrayado punteado y al pasar el puntero aparece
+el desglose (`tooltip.NumeroConDetalle`). Ojo: el terminal de MEXC pinta su "Fees" como
+`totalFee + lowSaveTotalFee`, así que su número es más alto que el real.
+
 **Seguridad de la key.** Se crea en MEXC con permisos de futuros + lectura, **sin retiros ni
 transferencias**, y con **IP vinculada** (sin IP la key expira a los 90 días). Si el ISP cambia
 la IP, la API responde `406 Accessing IP is not in the whitelist`; la app muestra la IP actual
@@ -233,7 +255,7 @@ en la cabecera con botón para copiarla.
 - La key vive en el **Windows Credential Manager** (`creds.py`). Nunca en el código, nunca en
   `config.json`, nunca en un log.
 - `trades.log` no contiene material sensible.
-- DRY-RUN bloquea abrir, cerrar y reverse; TP/SL y margen pasan siempre. Es la red de
+- DRY-RUN bloquea abrir, cerrar y reverse; TP/SL, margen y cancelar pasan siempre. Es la red de
   seguridad principal.
 - La app no escucha puertos ni corre nada en segundo plano al cerrarse.
 
@@ -250,7 +272,7 @@ en la cabecera con botón para copiarla.
   límite con `fmt_price_exact` (`priceScale` del contrato).
 - La fila de posiciones no crece: la barra de cierre va en dos líneas dentro de los 200 px
   de la columna de acciones (`[Mercado ▾][100% ▾]` / `[Cerrar LONG][Reverse]`). Sus popups
-  se anclan bajo el control, no se centran, y son modales (`grab_set`) como el buscador.
+  se anclan bajo el control, no se centran, y **no** usan `grab_set` (ver más abajo).
 - Nada de `messagebox`: usar `dialog.confirm` / `dialog.show` / `dialog.ask_key`.
 - La tabla **no usa `ttk.Treeview`** (no permite color por celda).
 - `pack` reparte espacio en orden de llamada: lo que no debe encogerse va **primero**.
@@ -258,9 +280,25 @@ en la cabecera con botón para copiarla.
   Comprobado por `tests/test_no_threaded_widgets.py`: un `configure`/`set_*` desde un hilo
   deja la ventana sorda.
 - **Ningún request desde el hilo de la UI.** `_open_search` carga el catálogo en un hilo y
-  abre el popup por la cola. Pedirlo en línea congelaba la ventana hasta 8 s.
+  abre el popup por la cola. Pedirlo en línea congelaba la ventana hasta 8 s. El editor de
+  órdenes calcula los contratos con `size_to_vol(..., contract=cacheado)`, sin pedir nada.
 - El buscador es **modal** (`grab_set`): si quedaba abierto flotando sobre las tarjetas se
   comía los clics y parecía que los inputs estaban deshabilitados.
+- **Nunca uses `_root`, `anchor` ni `size` como atributos de un widget.** Son métodos
+  de tkinter (`Misc._root`, `grid_anchor`, `grid_size`); pisarlos rompe la resolución de
+  eventos (`%W` → `nametowidget` → `_root()`) y el error se lleva el `mainloop`: la app
+  se cierra. En `closebar` son `_ventana`, `_ancla` y `contract_size`.
+- **Los paneles flotantes (precio y %) no usan `grab_set`.** Un grab local se traga el
+  primer clic de afuera: cerraba el panel pero el input que tocabas no recibía el clic ni
+  el teclado, y el foco quedaba en el chip. Ahora se cierran con el primer clic dentro de
+  la ventana (ese clic igual llega a su destino) y solo devuelven el foco al chip si el
+  panel todavía lo tenía.
+- **Un panel que se lleva el teclado tiene que devolverlo al cerrarse.** `_Popup.show()`
+  usa `focus_force` (sin eso su caja de precio no recibe teclas). Al morir esa ventana
+  Tk queda **sin ventana con foco** y `focus_set` sobre la ventana grande queda diferido:
+  ningún input acepta teclas (síntoma: "el campo está deshabilitado"). `destroy` llama
+  `self._ventana.focus_force()` antes de pasarle el foco al chip; con `focus_set` solo no
+  alcanza. Es el mismo `parent.focus_force()` que hacen `SearchPopup` y `dialog.Modal`.
 - **Ningún `dialog.show`/`confirm` dentro de `_drain`.** Un modal ahí adentro congela el
   callback todo el tiempo que el usuario lo deje abierto (`perf.log` llegó a registrar
   drains de 1.6 s). Los avisos pasan por `App._notice`, que los encola y abre uno por vez
@@ -283,6 +321,8 @@ en la cabecera con botón para copiarla.
 | **Cierre por defecto: mercado y 100 %** | Sin tocar los inputs se comporta igual que antes; el cierre parcial y el límite son opcionales |
 | **El % no se guarda** por fila | Un 30 % viejo aplicado a otra posición es riesgo; se reinicia a 100 % |
 | **El color del botón de cerrar sigue al PnL** | Es el dato que se mira antes de decidir; el lado va en el texto |
+| **Modificar una orden = cancelar y reenviar** | MEXC no deja editar una orden viva: se cancela, se espera a que libere el margen (`_wait_order_gone`) y se envía la nueva. El editor lo avisa en amarillo |
+| **La tabla de órdenes imita a MEXC** | Es el panel que el usuario ya conoce: par + `Perpetual` con el % llenado, TP/SL en dos líneas y lápiz en Monto/Precio/TP-SL |
 | **Cero dependencias de UI nuevas** | `customtkinter` + `httpx` + `keyring`. Nada de Qt (200 MB) |
 
 ---
@@ -330,6 +370,45 @@ en la cabecera con botón para copiarla.
     orden vieja contabilizada. `_wait_tpsl_clear()` sondea `stoporder/list/orders` hasta
     que la posición queda a 0 (máx. 2.5 s) antes de volver a colocar.
 
+18. **"No puedo escribir en el input" después de usar un popup (Mercado/Límite, %)**: el
+    panel se lleva el teclado con `focus_force` (necesario para que su caja de precio reciba
+    teclas). Cuando esa ventana muere, Tk se queda **sin ventana con foco**: los
+    `focus_set` que dispara un clic quedan diferidos y **ningún input de la ventana grande
+    acepta teclas** (se percibía como "el campo está deshabilitado"). Se arreglaba solo al
+    abrir y cerrar el buscador porque `SearchPopup.destroy` hace `parent.focus_force()`.
+    Ahora `_Popup.destroy` devuelve el foco con `focus_force` a la ventana antes de pasarlo
+    al chip y los diálogos hacen lo mismo en `dialog.Modal.destroy`
+    (`tests/test_ui_smoke.py::test_el_panel_devuelve_el_teclado_a_la_ventana` y
+    `::test_los_dialogos_tambien_devuelven_el_teclado`).
+    El `grab_set` que tenía el panel era otro problema (se tragaba el primer clic de
+    afuera); los paneles ya no lo usan. Si el síntoma vuelve, mirar `closebar._Popup`,
+    no el `CTkEntry`.
+
+19. **La app se cerraba al abrir el panel del precio**: `_Popup` guardaba
+    `self._root = anchor.winfo_toplevel()` y `self.anchor = ...`, y `_root`/`anchor`/
+    `size` son métodos de tkinter. Al mapear la ventana, tkinter resuelve `%W` con
+    `_nametowidget → w._root()` y encontraba una ventana en vez del método: TypeError,
+    el manejador de errores volvía a fallar y el proceso salía del `mainloop`. Ahora se
+    llaman `_ventana`, `_ancla` y `contract_size`; `tests/test_ui_smoke.py` falla si un
+    widget vuelve a pisar un método de tkinter. Los tests no lo vieron porque usan
+    `update()` y no `mainloop()`: el doble fallo queda como error de Tcl.
+
+20. **`order/cancel` respondía 600 Parameter error**: el body es un **array de ids sueltos**
+    (`["871374754337090048"]`), no `{"orderIds": [...]}`; los ids van como texto para no
+    perder precisión (18 dígitos). `mexc.cancel()` lo arma así y
+    `tests/test_mexc_orders.py` fija el payload. Comprobado contra la cuenta real creando
+    una límite a mitad de precio y cancelándola.
+
+21. **La fee de la posición salía congelada y más baja que en MEXC**: la celda mostraba
+    `totalFee`, que es **solo la comisión cobrada al abrir**. MEXC suma también el funding
+    (`holdFee`, que en su panel va en una línea aparte). Ahora `mexc.fee_desglose()` devuelve
+    comisión + funding (`1.4833` con la cuenta real) y la fila pinta ese total con subrayado
+    punteado: al pasar el puntero aparece el desglose (`tooltip.NumeroConDetalle`).
+    Tests: `tests/test_mexc_pure.py::test_la_fee_es_comision_mas_funding` y
+    `test_ui_smoke.py::test_la_fee_suma_comision_y_funding_y_trae_detalle`.
+    Ojo con los números de MEXC: su "Fees" del panel es `totalFee + lowSaveTotalFee` (por eso
+    sale más alto) y `lowSaveTotalFee` es el "Fees saved", que **no** suma.
+
 **Cómo diagnosticar un bloqueo de UI:** `perf.log` registra con hora cualquier callback
 de `_drain` que tarde más de 200 ms **y los mensajes que lo causaron**
 (`drain 1645 ms · history,positions`). Si el archivo tiene líneas, ahí está el culpable.
@@ -341,7 +420,7 @@ de `_drain` que tarde más de 200 ms **y los mensajes que lo causaron**
 ```powershell
 python app.py                 # lanzador del acceso directo, con consola para ver errores
 python -m tradedesk           # lo mismo, con PYTHONPATH=src
-python -m pytest              # 44 tests: logica pura, payloads y UI
+python -m pytest              # 70 tests: logica pura, payloads y UI
 python -m pytest -m ui        # solo los de ventana (miden la fila y los popups)
 python -m ruff check .        # lint
 python -m ruff format --check .   # formato (lo que corre el CI)
@@ -349,7 +428,8 @@ scripts\check.bat             # las tres cosas juntas
 
 python tools/smoke_api.py     # red real: precio, contrato, USDT -> contratos
 python tools/check_account.py # consulta la cuenta real: saldo, posiciones, historial
-python tools/smoke_live.py 9  # arranca 9 s, pinta las posiciones y cierra sola
+python tools/smoke_live.py 9  # arranca 9 s, pinta posiciones y ordenes, cierra sola
+python tools/medir_repintado.py  # ms que tarda en repintarse al restaurar
 # perf.log registra cualquier callback de la UI que tarde > 200 ms
 ```
 
@@ -368,7 +448,9 @@ Prueba real mínima: 5 USDT, 1x, DRY-RUN apagado, LONG, y cerrar con el botón d
 ## 10. Estado actual y pendientes
 
 **Funciona y está verificado con dinero real:** abrir a mercado, cerrar una posición,
-cerrar todas, DRY-RUN, historial, búsqueda, conversión de tamaño.
+cerrar todas, DRY-RUN, historial, búsqueda, conversión de tamaño, **abrir una límite, verla
+en la pestaña Órdenes, cancelarla y modificarla** (crear → listar → cancelar → editar y
+reenviar, todo probado contra la cuenta con órdenes de prueba a mitad de precio).
 
 **Sin probar contra posición real:** `Reverse` y el cierre desde el botón de la fila
 (la ruta existe y la firma está validada, pero no se ejecutó con posición abierta).

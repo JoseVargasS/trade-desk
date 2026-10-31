@@ -5,7 +5,25 @@ import customtkinter as ctk
 from . import theme as t
 
 
-class _Dialog(ctk.CTkToplevel):
+class Modal(ctk.CTkToplevel):
+    """Ventana modal que al cerrarse le devuelve el teclado a la ventana padre.
+
+    Un dialogo se lleva el teclado con `focus_force`; si al morir no lo devuelve,
+    Tk queda **sin ventana con foco** y `focus_set` sobre la ventana grande queda
+    diferido: ningun input de atras acepta teclas (se ve como "el campo esta
+    deshabilitado"). Es el mismo caso que `closebar._Popup`.
+    """
+
+    def destroy(self):
+        padre = self.master
+        super().destroy()
+        try:
+            padre.focus_force()
+        except Exception:
+            pass
+
+
+class _Dialog(Modal):
     def __init__(
         self,
         parent,
@@ -155,7 +173,7 @@ def show(parent, title, message, warn=None, danger=False):
     parent.wait_window(d)
 
 
-class _KeyDialog(ctk.CTkToplevel):
+class _KeyDialog(Modal):
     def __init__(self, parent, verify):
         super().__init__(parent)
         self.result = None
@@ -271,7 +289,7 @@ def ask_key(parent, verify):
     return d.result
 
 
-class _FormDialog(ctk.CTkToplevel):
+class _FormDialog(Modal):
     """Formulario chico: N campos etiquetados, devuelve dict o None."""
 
     def __init__(self, parent, title, fields, ok_text="Guardar", note=None):

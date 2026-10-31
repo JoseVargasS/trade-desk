@@ -1,9 +1,12 @@
 """Arranca la ventana real N segundos y reporta lo que pinto.
 
-Sirve para comprobar que el reorg (rutas, fuentes, icono) no rompio nada sin
-tocar la cuenta: no envia ordenes y cierra sola.
+Sirve para comprobar que un cambio de UI no rompio nada sin tocar la cuenta: no
+envia ordenes y cierra sola.
 
     python tools/smoke_live.py 9
+
+Lo que se pinta se lee **antes** de destruir la ventana: los widgets nativos ya
+no se pueden consultar cuando el root esta destruido.
 """
 
 import sys
@@ -19,6 +22,40 @@ from tradedesk.app import App  # noqa: E402
 from tradedesk.paths import ASSETS, DATA_DIR  # noqa: E402
 
 
+def _posiciones(app):
+    filas = []
+    for pid, row in app.table.rows.items():
+        barra = row["bar"]
+        filas.append(
+            (
+                pid,
+                row["labels"]["pos"].cget("text"),
+                row["labels"]["mar_val"].cget("text"),
+                barra.close_btn.cget("text"),
+                barra.close_btn.cget("fg_color"),
+            )
+        )
+    return filas
+
+
+def _ordenes(app):
+    filas = []
+    for oid, row in app.orders.rows.items():
+        et = row["labels"]
+        filas.append(
+            (
+                oid,
+                et["par"].cget("text"),
+                et["dir"].cget("text"),
+                et["precio"].cget("text"),
+                et["monto"].cget("text"),
+                et["tp"].cget("text"),
+                et["sl"].cget("text"),
+            )
+        )
+    return filas
+
+
 def main(seconds=9.0):
     key, secret = creds.load("mexc")
     print("datos:", DATA_DIR)
@@ -32,23 +69,30 @@ def main(seconds=9.0):
         print("EXCEPCION:", exc[1]),
     )
     app = App(root)
-    root.after(int(seconds * 1000), root.destroy)
+    pintado = {}
+
+    def terminar():
+        try:
+            pintado["pos"] = _posiciones(app)
+            pintado["ord"] = _ordenes(app)
+        except Exception:
+            traceback.print_exc()
+        root.destroy()
+
+    root.after(int(seconds * 1000), terminar)
     root.mainloop()
 
-    print("filas pintadas:", len(app.table.rows))
-    for pid, row in app.table.rows.items():
-        bar = row["bar"]
-        print(
-            "  ",
-            pid,
-            "|",
-            row["labels"]["pos"].cget("text"),
-            "|",
-            row["labels"]["mar_val"].cget("text"),
-            "|",
-            bar.close_btn.cget("text"),
-            bar.close_btn.cget("fg_color"),
-        )
+    filas = pintado.get("pos", [])
+    print("filas pintadas:", len(filas))
+    for pid, pos, margen, texto, color in filas:
+        print("  ", pid, "|", pos, "|", margen, "|", texto, color)
+
+    ordenes = pintado.get("ord", [])
+    print("ordenes pintadas:", len(ordenes))
+    for oid, par, direccion, precio, monto, tp, sl in ordenes:
+        niveles = f"{tp} {sl}".strip()
+        print("  ", oid, "|", par, "|", direccion, "|", precio, "|", monto, "|", niveles)
+
     print("errores:", len(errors))
     return 1 if errors else 0
 

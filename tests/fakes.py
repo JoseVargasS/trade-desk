@@ -27,11 +27,17 @@ class FakeMexc(Mexc):
             "quoteCoinName": "USDT",
         }
 
+    def known_contract(self, symbol):
+        """Sin cache ni catalogo reales: el doble siempre conoce el contrato."""
+        return self.contract(symbol)
+
     def tpsl_list(self):
         return self.stops
 
     def _post(self, path, payload):
-        self.sent.append((path, dict(payload)))
+        # hay endpoints con dict y otros con array (order/cancel): se copia igual
+        copia = dict(payload) if isinstance(payload, dict) else list(payload)
+        self.sent.append((path, copia))
         return {"orderId": "test"}
 
     def _get(self, path, params=None):
@@ -49,6 +55,7 @@ def posicion(**extra):
         "holdAvgPrice": 3990.5,
         "unRealizedPnl": -7.2633,
         "totalFee": 0.9993,
+        "holdFee": -0.484,
         "liquidatePrice": 3611.8,
         "marginRatio": 0.005,
         "leverage": 10,
@@ -59,6 +66,7 @@ def posicion(**extra):
         "_volUnit": 1,
         "_priceScale": 2,
         "_name": "GOLD(XAU)USDT",
+        "_takerRate": 0.0002,
         "_tp": 0.0,
         "_sl": 0.0,
         "_tpsl_id": None,
