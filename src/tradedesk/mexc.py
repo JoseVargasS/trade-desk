@@ -2,6 +2,7 @@
 
 Solo lo necesario para operar a mercado: precio, posiciones, abrir, cerrar.
 """
+
 import hashlib
 import hmac
 import json
@@ -14,8 +15,10 @@ import httpx
 BASE = "https://contract.mexc.com"
 
 # el WAF de MEXC devuelve 403 con el User-Agent por defecto de las librerias Python
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 # codigos de error que vale la pena traducir
 ERRORES = {
@@ -30,10 +33,14 @@ ERRORES = {
     2001: "Direccion de orden invalida.",
     2015: "Precision de precio o cantidad invalida para este contrato.",
     5002: "La orden TP/SL ya no existe: puede haberse ejecutado o estar cancelandose.",
-    5003: ("Precio de TP/SL invalido: MEXC exige que el TP este del lado de la ganancia "
-           "y el SL del lado de la perdida, tomando como referencia el precio actual."),
-    5004: ("La cantidad de la orden mas el TP/SL vigente supera lo cerrable. "
-           "La orden anterior se cancela de forma asincrona: reintenta en un segundo."),
+    5003: (
+        "Precio de TP/SL invalido: MEXC exige que el TP este del lado de la ganancia "
+        "y el SL del lado de la perdida, tomando como referencia el precio actual."
+    ),
+    5004: (
+        "La cantidad de la orden mas el TP/SL vigente supera lo cerrable. "
+        "La orden anterior se cancela de forma asincrona: reintenta en un segundo."
+    ),
 }
 
 
@@ -76,20 +83,23 @@ def plan_tp_sl(long_, price, tp, sl):
     if tp is not None and not en_ganancia(tp):
         raise MexcError(
             f"El take profit ({fmt_plain(tp)}) tiene que estar {lado_ganancia} del "
-            f"precio actual ({fmt_plain(price)}): si ya esta alcanzado, MEXC lo rechaza.")
+            f"precio actual ({fmt_plain(price)}): si ya esta alcanzado, MEXC lo rechaza."
+        )
 
     if sl is not None and en_ganancia(sl):
         if tp is None:
             avisos.append(
                 f"El SL {fmt_plain(sl)} estaba del lado de la ganancia: MEXC solo acepta "
                 f"ese nivel como take profit, asi que se guardo como TP "
-                f"(cierra en {fmt_plain(sl)}). La posicion queda SIN stop loss.")
+                f"(cierra en {fmt_plain(sl)}). La posicion queda SIN stop loss."
+            )
             tp, sl = sl, None
         else:
             raise MexcError(
                 f"El TP ({fmt_plain(tp)}) y el SL ({fmt_plain(sl)}) quedan los dos del "
                 f"lado de la ganancia del precio actual ({fmt_plain(price)}). MEXC solo "
-                f"admite un nivel ahi: deja el SL {lado_perdida} de {fmt_plain(price)}.")
+                f"admite un nivel ahi: deja el SL {lado_perdida} de {fmt_plain(price)}."
+            )
 
     return tp, sl, avisos
 
@@ -170,7 +180,10 @@ class Mexc:
             data = resp.json()
         except ValueError:
             if resp.status_code in (403, 418, 429):
-                raise MexcError(f"HTTP {resp.status_code}: peticion bloqueada (WAF o limite). Reintenta en unos segundos.") from None
+                raise MexcError(
+                    f"HTTP {resp.status_code}: peticion bloqueada (WAF o limite). "
+                    "Reintenta en unos segundos."
+                ) from None
             raise MexcError(f"HTTP {resp.status_code}: respuesta no JSON") from None
         if data.get("success") is not True:
             code = data.get("code")
@@ -209,7 +222,9 @@ class Mexc:
 
     def contract(self, symbol):
         if symbol not in self._contracts:
-            data = self.http.get("/api/v1/contract/detail", params={"symbol": symbol}).json()["data"]
+            data = self.http.get("/api/v1/contract/detail", params={"symbol": symbol}).json()[
+                "data"
+            ]
             self._contracts[symbol] = data
         return self._contracts[symbol]
 
@@ -226,8 +241,7 @@ class Mexc:
         if self._markets is None or force:
             data = self.http.get("/api/v1/contract/detail").json()["data"]
             self._markets = {
-                c["symbol"]: c for c in data
-                if c.get("state") == 0 and c.get("apiAllowed")
+                c["symbol"]: c for c in data if c.get("state") == 0 and c.get("apiAllowed")
             }
         return self._markets
 
@@ -258,7 +272,9 @@ class Mexc:
 
         if vol < min_vol:
             minimo = min_vol * size * price
-            raise MexcError(f"Tamano muy chico: {vol} contratos. Minimo {min_vol} = {minimo:.2f} USDT")
+            raise MexcError(
+                f"Tamano muy chico: {vol} contratos. Minimo {min_vol} = {minimo:.2f} USDT"
+            )
         if max_vol and vol > max_vol:
             raise MexcError(f"Tamano muy grande: {vol} > maximo {max_vol}")
         return vol
@@ -271,12 +287,18 @@ class Mexc:
         return self._get("/api/v1/private/position/open_positions") or []
 
     def open_orders(self):
-        return self._get("/api/v1/private/order/list/open_orders",
-                         {"page_num": 1, "page_size": 20}) or []
+        return (
+            self._get("/api/v1/private/order/list/open_orders", {"page_num": 1, "page_size": 20})
+            or []
+        )
 
     def history(self, size=50):
-        return self._get("/api/v1/private/order/list/history_orders",
-                         {"page_num": 1, "page_size": size}) or []
+        return (
+            self._get(
+                "/api/v1/private/order/list/history_orders", {"page_num": 1, "page_size": size}
+            )
+            or []
+        )
 
     def assets(self):
         return self._get("/api/v1/private/account/assets") or []
@@ -289,9 +311,9 @@ class Mexc:
             "symbol": symbol,
             "price": px,
             "vol": vol,
-            "side": 1 if side == "LONG" else 3,   # 1 abre long / 3 abre short
-            "type": 5,                             # 5 = mercado
-            "openType": int(open_type),            # 1 aislado / 2 cruzado
+            "side": 1 if side == "LONG" else 3,  # 1 abre long / 3 abre short
+            "type": 5,  # 5 = mercado
+            "openType": int(open_type),  # 1 aislado / 2 cruzado
             "leverage": int(leverage),
             "externalOid": uuid.uuid4().hex[:24],  # idempotencia: un reintento no duplica
         }
@@ -339,16 +361,24 @@ class Mexc:
         return self._post("/api/v1/private/position/close_all", {})
 
     def reverse(self, pos):
-        return self._post("/api/v1/private/position/reverse", {
-            "symbol": pos["symbol"],
-            "positionId": int(pos["positionId"]),
-            "vol": float(pos["holdVol"]),
-        })
+        return self._post(
+            "/api/v1/private/position/reverse",
+            {
+                "symbol": pos["symbol"],
+                "positionId": int(pos["positionId"]),
+                "vol": float(pos["holdVol"]),
+            },
+        )
 
     def tpsl_list(self):
         """TP/SL no finalizados, para cruzar por positionId."""
-        return self._get("/api/v1/private/stoporder/list/orders",
-                         {"is_finished": 0, "page_num": 1, "page_size": 100}) or []
+        return (
+            self._get(
+                "/api/v1/private/stoporder/list/orders",
+                {"is_finished": 0, "page_num": 1, "page_size": 100},
+            )
+            or []
+        )
 
     def tpsl_place(self, position_id, vol, tp=None, sl=None):
         payload = {
@@ -360,47 +390,25 @@ class Mexc:
         }
         if tp:
             payload["takeProfitPrice"] = float(tp)
-            payload["takeProfitType"] = 0   # 0 = TP a mercado
+            payload["takeProfitType"] = 0  # 0 = TP a mercado
         if sl:
             payload["stopLossPrice"] = float(sl)
-            payload["stopLossType"] = 0     # 0 = SL a mercado
+            payload["stopLossType"] = 0  # 0 = SL a mercado
         return self._post("/api/v1/private/stoporder/place", payload)
 
     def tpsl_cancel(self, stop_id):
         # el endpoint espera un array de objetos, no un objeto
-        return self._post("/api/v1/private/stoporder/cancel",
-                          [{"stopPlanOrderId": int(stop_id)}])
+        return self._post("/api/v1/private/stoporder/cancel", [{"stopPlanOrderId": int(stop_id)}])
 
     def change_margin(self, position_id, amount, kind="ADD"):
-        return self._post("/api/v1/private/position/change_margin", {
-            "positionId": int(position_id),
-            "amount": float(amount),
-            "type": kind,
-        })
+        return self._post(
+            "/api/v1/private/position/change_margin",
+            {
+                "positionId": int(position_id),
+                "amount": float(amount),
+                "type": kind,
+            },
+        )
 
     def cancel(self, order_ids):
         return self._post("/api/v1/private/order/cancel", {"orderIds": [int(i) for i in order_ids]})
-
-
-# ------------------------------------------------------------------ self-check
-if __name__ == "__main__":
-    m = Mexc()
-    px = m.price("BTC_USDT")
-    c = m.contract("BTC_USDT")
-    print(f"BTC_USDT precio={px} contractSize={c['contractSize']} volUnit={c['volUnit']} minVol={c['minVol']}")
-
-    # 1000 USDT nocionales deben dar el vol esperado, nunca mas
-    vol = m.size_to_vol("BTC_USDT", 1000, px)
-    real = m.vol_to_usdt("BTC_USDT", vol, px)
-    assert 0 < real <= 1000, f"nocional {real} excede 1000"
-    assert real > 1000 - m.vol_to_usdt("BTC_USDT", float(c["volUnit"]), px), "redondeo demasiado conservador"
-    print(f"1000 USDT -> {vol} contratos = {real:.2f} USDT reales")
-
-    # un tamano imposible debe fallar, no devolver 0 silencioso
-    try:
-        m.size_to_vol("BTC_USDT", 0.01, px)
-        raise SystemExit("FALLO: tamano minimo no fue rechazado")
-    except MexcError as e:
-        print(f"rechazo correcto: {e}")
-
-    print("OK")

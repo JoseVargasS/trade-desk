@@ -4,12 +4,13 @@ Vive aparte de table.py porque trae sus dos popups (precio y porcentaje) y
 table.py ya esta cerca del tope de lineas. No habla con la API: solo junta
 lo que el usuario eligio y se lo pasa a la accion de cerrar.
 """
+
 import math
 
 import customtkinter as ctk
 
-import theme as t
-from mexc import close_vol
+from . import theme as t
+from .mexc import close_vol
 
 W_PRICE = 106
 W_PCT = 78
@@ -28,8 +29,7 @@ class _Popup(ctk.CTkToplevel):
         self.overrideredirect(True)
         self.configure(fg_color=t.LINE)
         self.transient(anchor.winfo_toplevel())
-        self.wrap = ctk.CTkFrame(self, fg_color=t.CARD, corner_radius=t.R_CARD,
-                                 width=width)
+        self.wrap = ctk.CTkFrame(self, fg_color=t.CARD, corner_radius=t.R_CARD, width=width)
         self.wrap.pack(fill="both", expand=True, padx=1, pady=1)
         self.bind("<Escape>", lambda e: self.destroy())
         self.bind("<Button-1>", self._click_out)
@@ -69,16 +69,24 @@ class _PercentPopup(_Popup):
         self.bar = bar
         self.low = bar.min_pct()
 
-        self.lines = ctk.CTkLabel(self.wrap, text="", font=(t.NUM, 10),
-                                  text_color=t.MUTED, justify="left", anchor="w")
+        self.lines = ctk.CTkLabel(
+            self.wrap, text="", font=(t.NUM, 10), text_color=t.MUTED, justify="left", anchor="w"
+        )
         self.lines.pack(fill="x", padx=12, pady=(10, 8))
 
         self.slider = ctk.CTkSlider(
-            self.wrap, width=214, height=14, from_=self.low, to=100,
+            self.wrap,
+            width=214,
+            height=14,
+            from_=self.low,
+            to=100,
             number_of_steps=max(1, int(100 - self.low)),
-            fg_color=t.BORDER, progress_color=t.TEXT,
-            button_color=t.TEXT, button_hover_color=t.TEXT,
-            command=self._slide)
+            fg_color=t.BORDER,
+            progress_color=t.TEXT,
+            button_color=t.TEXT,
+            button_hover_color=t.TEXT,
+            command=self._slide,
+        )
         self.slider.set(max(self.low, bar.pct))
         self.slider.pack(padx=12, pady=(0, 2))
 
@@ -86,25 +94,45 @@ class _PercentPopup(_Popup):
         ticks.pack(fill="x", padx=14)
         for i, label in enumerate(("1", "25", "50", "75", "100")):
             ticks.grid_columnconfigure(i, weight=1, uniform="tick")
-            ctk.CTkLabel(ticks, text=label, font=(t.NUM, 9),
-                         text_color=t.BORDER).grid(row=0, column=i, sticky="nsew")
+            ctk.CTkLabel(ticks, text=label, font=(t.NUM, 9), text_color=t.BORDER).grid(
+                row=0, column=i, sticky="nsew"
+            )
 
         row = ctk.CTkFrame(self.wrap, fg_color="transparent")
         row.pack(fill="x", padx=12, pady=(8, 10))
         self.var = ctk.StringVar(value=f"{bar.pct:.0f}")
-        self.entry = ctk.CTkEntry(row, textvariable=self.var, width=54, height=24,
-                                  fg_color=t.INPUT, border_color=t.BORDER,
-                                  text_color=t.TEXT, font=(t.NUM, 12), justify="right")
+        self.entry = ctk.CTkEntry(
+            row,
+            textvariable=self.var,
+            width=54,
+            height=24,
+            fg_color=t.INPUT,
+            border_color=t.BORDER,
+            text_color=t.TEXT,
+            font=(t.NUM, 12),
+            justify="right",
+        )
         self.entry.pack(side="left")
         ctk.CTkLabel(row, text="%", font=(t.NUM, 12), text_color=t.MUTED).pack(
-            side="left", padx=(4, 0))
+            side="left", padx=(4, 0)
+        )
         self.entry.bind("<KeyRelease>", self._typed)
         self.entry.bind("<Return>", lambda e: self.destroy())
         self.entry.bind("<FocusOut>", lambda e: self.var.set(f"{self.bar.pct:.0f}"))
-        ctk.CTkButton(row, text="Listo", width=64, height=24, corner_radius=t.R_CHIP,
-                      fg_color=t.INPUT, hover_color=t.BORDER, border_width=1,
-                      border_color=t.BORDER, text_color=t.TEXT, font=(t.UI, 11),
-                      command=self.destroy).pack(side="right")
+        ctk.CTkButton(
+            row,
+            text="Listo",
+            width=64,
+            height=24,
+            corner_radius=t.R_CHIP,
+            fg_color=t.INPUT,
+            hover_color=t.BORDER,
+            border_width=1,
+            border_color=t.BORDER,
+            text_color=t.TEXT,
+            font=(t.UI, 11),
+            command=self.destroy,
+        ).pack(side="right")
 
         self._render()
         self.show()
@@ -129,11 +157,14 @@ class _PercentPopup(_Popup):
     def _render(self):
         pct = self.bar.pct
         minimo = self.bar.unit * self.bar.size * self.bar.mark
-        self.lines.configure(text=(
-            f"Cerrable: {t.fmt_fee(self.bar.notional)} USDT\n"
-            f"Cierras: {t.fmt_fee(self.bar.notional * pct / 100)} USDT "
-            f"≈ {t.fmt_qty(close_vol(self.bar.hold, pct))} contratos\n"
-            f"Mínimo: {t.fmt_qty(self.bar.unit)} contrato ({t.fmt_fee(minimo)} USDT)"))
+        self.lines.configure(
+            text=(
+                f"Cerrable: {t.fmt_fee(self.bar.notional)} USDT\n"
+                f"Cierras: {t.fmt_fee(self.bar.notional * pct / 100)} USDT "
+                f"≈ {t.fmt_qty(close_vol(self.bar.hold, pct))} contratos\n"
+                f"Mínimo: {t.fmt_qty(self.bar.unit)} contrato ({t.fmt_fee(minimo)} USDT)"
+            )
+        )
 
 
 class _PricePopup(_Popup):
@@ -143,24 +174,48 @@ class _PricePopup(_Popup):
         super().__init__(bar.price_btn, 236)
         self.bar = bar
         self.seg = ctk.CTkSegmentedButton(
-            self.wrap, values=["Mercado", "Límite"], height=26, width=204,
-            fg_color=t.INPUT, selected_color=t.ACCENT_SOFT,
-            selected_hover_color=t.ACCENT_SOFT, unselected_color=t.INPUT,
-            unselected_hover_color=t.BORDER, text_color=t.TEXT,
-            font=(t.UI, 11), command=self._mode)
+            self.wrap,
+            values=["Mercado", "Límite"],
+            height=26,
+            width=204,
+            fg_color=t.INPUT,
+            selected_color=t.ACCENT_SOFT,
+            selected_hover_color=t.ACCENT_SOFT,
+            unselected_color=t.INPUT,
+            unselected_hover_color=t.BORDER,
+            text_color=t.TEXT,
+            font=(t.UI, 11),
+            command=self._mode,
+        )
         self.seg.pack(fill="x", padx=12, pady=(10, 8))
 
-        self.var = ctk.StringVar(value=t.fmt_price_exact(bar.limit_price or bar.mark,
-                                                         bar.scale))
-        self.entry = ctk.CTkEntry(self.wrap, textvariable=self.var, height=26,
-                                  width=204, fg_color=t.INPUT, border_color=t.BORDER,
-                                  text_color=t.TEXT, font=(t.NUM, 12), justify="right")
+        self.var = ctk.StringVar(value=t.fmt_price_exact(bar.limit_price or bar.mark, bar.scale))
+        self.entry = ctk.CTkEntry(
+            self.wrap,
+            textvariable=self.var,
+            height=26,
+            width=204,
+            fg_color=t.INPUT,
+            border_color=t.BORDER,
+            text_color=t.TEXT,
+            font=(t.NUM, 12),
+            justify="right",
+        )
         self.entry.pack(fill="x", padx=12)
-        ctk.CTkButton(self.wrap, text="Listo", width=78, height=26,
-                      corner_radius=t.R_CHIP, fg_color=t.INPUT, hover_color=t.BORDER,
-                      border_width=1, border_color=t.BORDER, text_color=t.TEXT,
-                      font=(t.UI, 11), command=self._apply).pack(
-            anchor="e", padx=12, pady=(8, 10))
+        ctk.CTkButton(
+            self.wrap,
+            text="Listo",
+            width=78,
+            height=26,
+            corner_radius=t.R_CHIP,
+            fg_color=t.INPUT,
+            hover_color=t.BORDER,
+            border_width=1,
+            border_color=t.BORDER,
+            text_color=t.TEXT,
+            font=(t.UI, 11),
+            command=self._apply,
+        ).pack(anchor="e", padx=12, pady=(8, 10))
         self.entry.bind("<Return>", lambda e: self._apply())
 
         self.seg.set("Límite" if bar.limit_price else "Mercado")
@@ -169,8 +224,7 @@ class _PricePopup(_Popup):
 
     def _mode(self, value):
         if value == "Límite":
-            self.var.set(t.fmt_price_exact(self.bar.limit_price or self.bar.mark,
-                                          self.bar.scale))
+            self.var.set(t.fmt_price_exact(self.bar.limit_price or self.bar.mark, self.bar.scale))
             self.entry.configure(state="normal", text_color=t.TEXT)
             self.entry.focus_set()
             self.entry.select_range(0, "end")
@@ -213,30 +267,65 @@ class CloseBar(ctk.CTkFrame):
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.pack(anchor="e")
         self.price_btn = ctk.CTkButton(
-            top, text="Mercado", width=W_PRICE, height=H_FIELD,
-            corner_radius=t.R_CHIP, fg_color=t.INPUT, hover_color=t.BORDER,
-            border_width=1, border_color=t.BORDER, text_color=t.MUTED,
-            font=(t.UI, 11), command=self._open_price)
+            top,
+            text="Mercado",
+            width=W_PRICE,
+            height=H_FIELD,
+            corner_radius=t.R_CHIP,
+            fg_color=t.INPUT,
+            hover_color=t.BORDER,
+            border_width=1,
+            border_color=t.BORDER,
+            text_color=t.MUTED,
+            font=(t.UI, 11),
+            command=self._open_price,
+        )
         self.price_btn.pack(side="left")
         self.pct_btn = ctk.CTkButton(
-            top, text="100%", width=W_PCT, height=H_FIELD, corner_radius=t.R_CHIP,
-            fg_color=t.INPUT, hover_color=t.BORDER, border_width=1,
-            border_color=t.BORDER, text_color=t.TEXT, font=(t.NUM, 11),
-            command=self._open_pct)
+            top,
+            text="100%",
+            width=W_PCT,
+            height=H_FIELD,
+            corner_radius=t.R_CHIP,
+            fg_color=t.INPUT,
+            hover_color=t.BORDER,
+            border_width=1,
+            border_color=t.BORDER,
+            text_color=t.TEXT,
+            font=(t.NUM, 11),
+            command=self._open_pct,
+        )
         self.pct_btn.pack(side="left", padx=(6, 0))
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(anchor="e", pady=(4, 0))
         self.close_btn = ctk.CTkButton(
-            bottom, text="Cerrar", width=W_CLOSE, height=H_BTN,
-            corner_radius=t.R_CHIP, fg_color=t.GREEN, hover_color=t.GREEN_HOVER,
-            text_color=t.ON_GREEN, font=(t.UI, 12, "bold"), command=self._close)
+            bottom,
+            text="Cerrar",
+            width=W_CLOSE,
+            height=H_BTN,
+            corner_radius=t.R_CHIP,
+            fg_color=t.GREEN,
+            hover_color=t.GREEN_HOVER,
+            text_color=t.ON_GREEN,
+            font=(t.UI, 12, "bold"),
+            command=self._close,
+        )
         self.close_btn.pack(side="left")
-        ctk.CTkButton(bottom, text="Reverse", width=W_REVERSE, height=H_BTN,
-                      corner_radius=t.R_CHIP, fg_color=t.INPUT, hover_color=t.BORDER,
-                      border_width=1, border_color=t.BORDER, text_color=t.TEXT,
-                      font=(t.UI, 11), command=self.on_reverse).pack(
-            side="left", padx=(6, 0))
+        ctk.CTkButton(
+            bottom,
+            text="Reverse",
+            width=W_REVERSE,
+            height=H_BTN,
+            corner_radius=t.R_CHIP,
+            fg_color=t.INPUT,
+            hover_color=t.BORDER,
+            border_width=1,
+            border_color=t.BORDER,
+            text_color=t.TEXT,
+            font=(t.UI, 11),
+            command=self.on_reverse,
+        ).pack(side="left", padx=(6, 0))
 
     # ------------------------------------------------------------------ estado
     def set_context(self, pos, pnl, mark, notional):
@@ -255,8 +344,12 @@ class CloseBar(ctk.CTkFrame):
             fg, hover, on = t.RED, t.RED_HOVER, t.ON_RED
         else:
             fg, hover, on = t.MUTED, t.BORDER, t.BG
-        self.close_btn.configure(text=f"Cerrar {'LONG' if self.long else 'SHORT'}",
-                                 fg_color=fg, hover_color=hover, text_color=on)
+        self.close_btn.configure(
+            text=f"Cerrar {'LONG' if self.long else 'SHORT'}",
+            fg_color=fg,
+            hover_color=hover,
+            text_color=on,
+        )
 
     def min_pct(self):
         """% mas chico que todavia cierra al menos un contrato."""
@@ -272,8 +365,8 @@ class CloseBar(ctk.CTkFrame):
         self.limit_price = float(price) if price else None
         if self.limit_price:
             self.price_btn.configure(
-                text=t.fmt_price_exact(self.limit_price, self.scale),
-                text_color=t.TEXT)
+                text=t.fmt_price_exact(self.limit_price, self.scale), text_color=t.TEXT
+            )
         else:
             self.price_btn.configure(text="Mercado", text_color=t.MUTED)
 

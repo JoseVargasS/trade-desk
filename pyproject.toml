@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trade-desk"
+version = "0.1.0"
+description = "Mesa de ejecucion para futuros de MEXC en Windows (Tkinter)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "customtkinter>=6.0",
+    "httpx>=0.28",
+    "keyring>=25",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.17",
+    "pre-commit>=3",
+]
+
+[project.scripts]
+trade-desk = "tradedesk.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tradedesk = ["assets/*.ico", "assets/*.png", "assets/fonts/*.ttf"]
+
+# ------------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = [
+    "ui: abre una ventana Tk (se salta solo si no hay display)",
+]
+
+# --------------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 100
+target-version = "py313"   # subir a py314 cuando la version de ruff lo soporte
+exclude = [".git", "__pycache__", "build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+# try/except/pass a proposito: son limpiezas de UI o de cache, con return/continue
+# en medio en varios casos. contextlib.suppress no mejora la lectura.
+ignore = ["SIM105"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tradedesk"]
+
+[tool.ruff.format]
+quote-style = "double"

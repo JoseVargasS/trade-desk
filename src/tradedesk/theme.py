@@ -3,9 +3,12 @@
 Unica fuente de tokens. Ningun otro archivo define colores ni fuentes.
 Las reglas de uso estan en AGENTS.md y docs/DESIGN.md.
 """
+
 import ctypes
 import os
 import tkinter.font as tkfont
+
+from .paths import ASSETS
 
 # --------------------------------------------------------------------- color
 BG = "#0A0A0A"
@@ -43,12 +46,12 @@ R_CHIP = 6
 PAD = 8
 
 # ------------------------------------------------------------------ tipografia
-FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+FONT_DIR = str(ASSETS / "fonts")
 _FALLBACK = {"Geist": "Segoe UI"}
 
 _loaded = False
 UI = "Geist"
-NUM = "Geist"   # numeros: Geist proporcional, ~19% mas angosto que Geist Mono
+NUM = "Geist"  # numeros: Geist proporcional, ~19% mas angosto que Geist Mono
 
 
 def load_fonts():
@@ -59,8 +62,7 @@ def load_fonts():
     if os.name == "nt" and os.path.isdir(FONT_DIR):
         for name in sorted(os.listdir(FONT_DIR)):
             if name.lower().endswith(".ttf"):
-                ctypes.windll.gdi32.AddFontResourceExW(
-                    os.path.join(FONT_DIR, name), 0x10, 0)
+                ctypes.windll.gdi32.AddFontResourceExW(os.path.join(FONT_DIR, name), 0x10, 0)
     _loaded = True
 
 

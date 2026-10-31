@@ -2,6 +2,7 @@
 
 Las variables de entorno MEXC_KEY / MEXC_SECRET sirven de respaldo.
 """
+
 import os
 
 import keyring

@@ -3,14 +3,15 @@
 Filas hechas con widgets (no Treeview) para poder colorear celda por celda.
 Las filas se actualizan en sitio: solo se reconstruyen si cambia el conjunto.
 """
+
 import math
 import tkinter as tk
 from datetime import datetime
 
 import customtkinter as ctk
 
-import theme as t
-from closebar import CloseBar
+from . import theme as t
+from .closebar import CloseBar
 
 POS_COLS = (
     ("par", "Par", 132, "w"),
@@ -78,9 +79,15 @@ class Pencil(tk.Canvas):
     """Lapiz dibujado a mano: trazo fino, sin glifo de fuente, sin color de relleno."""
 
     def __init__(self, master, command, bg, size=20, enabled=True):
-        super().__init__(master, width=size, height=size, bg=bg,
-                         highlightthickness=0, bd=0,
-                         cursor="hand2" if enabled else "arrow")
+        super().__init__(
+            master,
+            width=size,
+            height=size,
+            bg=bg,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2" if enabled else "arrow",
+        )
         self.command = command
         self.size = size
         self.enabled = enabled
@@ -99,20 +106,25 @@ class Pencil(tk.Canvas):
         length, half, tip = 11, 1.8, 3
 
         def point(x, y):
-            return (ox + (x * cos - y * sin) * scale,
-                    oy + (x * sin + y * cos) * scale)
+            return (ox + (x * cos - y * sin) * scale, oy + (x * sin + y * cos) * scale)
 
-        body = [point(0, -half), point(length, -half), point(length + tip, 0),
-                point(length, half), point(0, half)]
-        self.create_polygon(body, outline=color, fill="",
-                            width=max(1, round(1.2 * scale)), joinstyle="round")
-        self.create_line(point(3, -half), point(3, half), fill=color,
-                         width=max(1, round(1.1 * scale)))
+        body = [
+            point(0, -half),
+            point(length, -half),
+            point(length + tip, 0),
+            point(length, half),
+            point(0, half),
+        ]
+        self.create_polygon(
+            body, outline=color, fill="", width=max(1, round(1.2 * scale)), joinstyle="round"
+        )
+        self.create_line(
+            point(3, -half), point(3, half), fill=color, width=max(1, round(1.1 * scale))
+        )
 
 
 class _Header(ctk.CTkFrame):
-    def __init__(self, parent, cols, checkbox_var=None, checkbox_command=None,
-                 extra_right=0):
+    def __init__(self, parent, cols, checkbox_var=None, checkbox_command=None, extra_right=0):
         super().__init__(parent, fg_color=t.SURFACE, corner_radius=0, height=36)
         self.grid_propagate(False)
         self.checkbox = None
@@ -120,25 +132,39 @@ class _Header(ctk.CTkFrame):
         if checkbox_var is not None:
             self.grid_columnconfigure(0, minsize=30, weight=0)
             self.checkbox = ctk.CTkCheckBox(
-                self, text="", width=22, checkbox_width=16, checkbox_height=16,
-                variable=checkbox_var, command=checkbox_command,
-                fg_color=t.GREEN, hover_color=t.GREEN, border_color=t.BORDER)
+                self,
+                text="",
+                width=22,
+                checkbox_width=16,
+                checkbox_height=16,
+                variable=checkbox_var,
+                command=checkbox_command,
+                fg_color=t.GREEN,
+                hover_color=t.GREEN,
+                border_color=t.BORDER,
+            )
             self.checkbox.grid(row=0, column=0, padx=(6, 0), pady=8)
             col = 1
         for i, (key, label, width, anchor) in enumerate(cols):
             gutter = PENCIL_GUTTER if key in PENCIL_COLS else 0
             self.grid_columnconfigure(col + i, minsize=width + 8, weight=0)
-            ctk.CTkLabel(self, text=label, font=(t.UI, 11, "bold"), text_color=t.MUTED,
-                         anchor=anchor, width=width - gutter).grid(
-                row=0, column=col + i, sticky="ew", padx=(6, 2 + gutter), pady=6)
+            ctk.CTkLabel(
+                self,
+                text=label,
+                font=(t.UI, 11, "bold"),
+                text_color=t.MUTED,
+                anchor=anchor,
+                width=width - gutter,
+            ).grid(row=0, column=col + i, sticky="ew", padx=(6, 2 + gutter), pady=6)
         if extra_right:
             self.grid_columnconfigure(col + len(cols), minsize=0, weight=1)
             self.grid_columnconfigure(col + len(cols) + 1, minsize=extra_right, weight=0)
 
 
 class PositionsTable(ctk.CTkFrame):
-    def __init__(self, parent, on_close, on_selection=None, on_tpsl=None,
-                 on_margin=None, on_reverse=None):
+    def __init__(
+        self, parent, on_close, on_selection=None, on_tpsl=None, on_margin=None, on_reverse=None
+    ):
         super().__init__(parent, fg_color="transparent")
         self.on_close = on_close
         self.on_selection = on_selection
@@ -148,18 +174,27 @@ class PositionsTable(ctk.CTkFrame):
         self.rows = {}
         self._all = ctk.BooleanVar(value=False)
 
-        self.header = _Header(self, POS_COLS, checkbox_var=self._all,
-                              checkbox_command=self._toggle_all, extra_right=ACTION_W)
+        self.header = _Header(
+            self,
+            POS_COLS,
+            checkbox_var=self._all,
+            checkbox_command=self._toggle_all,
+            extra_right=ACTION_W,
+        )
         self.header.pack(fill="x")
 
-        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent",
-                                           scrollbar_button_color=t.INPUT,
-                                           scrollbar_button_hover_color=t.BORDER)
+        self.body = ctk.CTkScrollableFrame(
+            self,
+            fg_color="transparent",
+            scrollbar_button_color=t.INPUT,
+            scrollbar_button_hover_color=t.BORDER,
+        )
         self.body.pack(fill="both", expand=True, pady=(4, 0))
         self.body.grid_columnconfigure(0, weight=1)
 
-        self.empty = ctk.CTkLabel(self.body, text="Sin posiciones abiertas",
-                                  font=(t.UI, 13), text_color=t.MUTED)
+        self.empty = ctk.CTkLabel(
+            self.body, text="Sin posiciones abiertas", font=(t.UI, 13), text_color=t.MUTED
+        )
         self.empty.grid(row=0, column=0, pady=30)
 
         # el cuerpo tiene barra de scroll y la cabecera no: se iguala el ancho
@@ -209,10 +244,18 @@ class PositionsTable(ctk.CTkFrame):
         frame.grid_rowconfigure(0, weight=1)
 
         var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(frame, text="", width=22, checkbox_width=16, checkbox_height=16,
-                        variable=var, command=self._sync_all,
-                        fg_color=t.GREEN, hover_color=t.GREEN,
-                        border_color=t.BORDER).grid(row=0, column=0, padx=(6, 0), pady=12)
+        ctk.CTkCheckBox(
+            frame,
+            text="",
+            width=22,
+            checkbox_width=16,
+            checkbox_height=16,
+            variable=var,
+            command=self._sync_all,
+            fg_color=t.GREEN,
+            hover_color=t.GREEN,
+            border_color=t.BORDER,
+        ).grid(row=0, column=0, padx=(6, 0), pady=12)
         frame.grid_columnconfigure(0, minsize=30, weight=0)
 
         cells = {}
@@ -224,12 +267,16 @@ class PositionsTable(ctk.CTkFrame):
                 cell = ctk.CTkFrame(frame, fg_color="transparent")
                 cell.grid(row=0, column=col, sticky="ew", padx=(6, 2))
                 cell.grid_columnconfigure(0, weight=1)
-                value = ctk.CTkLabel(cell, text="", font=(t.NUM, 13, "bold"),
-                                     text_color=t.TEXT, anchor="e")
+                value = ctk.CTkLabel(
+                    cell, text="", font=(t.NUM, 13, "bold"), text_color=t.TEXT, anchor="e"
+                )
                 value.grid(row=0, column=0, sticky="e")
-                Pencil(cell, lambda pos=p: self.on_margin(pos), bg=bg,
-                       enabled=int(p.get("openType") or 1) == 1).grid(
-                    row=0, column=1, padx=(4, 0), sticky="e")
+                Pencil(
+                    cell,
+                    lambda pos=p: self.on_margin(pos),
+                    bg=bg,
+                    enabled=int(p.get("openType") or 1) == 1,
+                ).grid(row=0, column=1, padx=(4, 0), sticky="e")
                 cells["mar_val"] = value
 
             elif key == "tpsl":
@@ -241,13 +288,17 @@ class PositionsTable(ctk.CTkFrame):
                 box = ctk.CTkFrame(cell, fg_color="transparent")
                 box.grid(row=0, column=0, sticky="e")
                 Pencil(cell, lambda pos=p: self.on_tpsl(pos), bg=bg).grid(
-                    row=0, column=1, sticky="e", padx=(4, 0))
-                tp = ctk.CTkLabel(box, text="", font=(t.NUM, 13, "bold"),
-                                  text_color=t.GREEN, anchor="e")
-                sep = ctk.CTkLabel(box, text="", font=(t.NUM, 13),
-                                   text_color=t.MUTED, anchor="e", width=16)
-                sl = ctk.CTkLabel(box, text="", font=(t.NUM, 13, "bold"),
-                                  text_color=t.RED, anchor="e")
+                    row=0, column=1, sticky="e", padx=(4, 0)
+                )
+                tp = ctk.CTkLabel(
+                    box, text="", font=(t.NUM, 13, "bold"), text_color=t.GREEN, anchor="e"
+                )
+                sep = ctk.CTkLabel(
+                    box, text="", font=(t.NUM, 13), text_color=t.MUTED, anchor="e", width=16
+                )
+                sl = ctk.CTkLabel(
+                    box, text="", font=(t.NUM, 13, "bold"), text_color=t.RED, anchor="e"
+                )
                 sl.pack(side="right")
                 sep.pack(side="right")
                 tp.pack(side="right")
@@ -258,11 +309,18 @@ class PositionsTable(ctk.CTkFrame):
                 cell = ctk.CTkFrame(frame, fg_color="transparent")
                 cell.grid(row=0, column=col, sticky="ew", padx=(6, 2))
                 cell.grid_columnconfigure(0, weight=1)
-                value = ctk.CTkLabel(cell, text="", font=(t.NUM, 13, "bold"),
-                                     text_color=t.TEXT, anchor="e", height=19)
+                value = ctk.CTkLabel(
+                    cell,
+                    text="",
+                    font=(t.NUM, 13, "bold"),
+                    text_color=t.TEXT,
+                    anchor="e",
+                    height=19,
+                )
                 value.grid(row=0, column=0, sticky="e")
-                pct = ctk.CTkLabel(cell, text="", font=(t.NUM, 11),
-                                   text_color=t.MUTED, anchor="e", height=15)
+                pct = ctk.CTkLabel(
+                    cell, text="", font=(t.NUM, 11), text_color=t.MUTED, anchor="e", height=15
+                )
                 pct.grid(row=1, column=0, sticky="e")
                 cells["pnl"], cells["pnl_pct"] = value, pct
 
@@ -271,22 +329,31 @@ class PositionsTable(ctk.CTkFrame):
                 cell = ctk.CTkFrame(frame, fg_color="transparent")
                 cell.grid(row=0, column=col, sticky="ew", padx=(6, 2))
                 cell.grid_columnconfigure(0, weight=1)
-                value = ctk.CTkLabel(cell, text="", font=(t.NUM, 13, "bold"),
-                                     text_color=t.TEXT, anchor="e", height=19)
+                value = ctk.CTkLabel(
+                    cell,
+                    text="",
+                    font=(t.NUM, 13, "bold"),
+                    text_color=t.TEXT,
+                    anchor="e",
+                    height=19,
+                )
                 value.grid(row=0, column=0, sticky="e")
-                share = ctk.CTkLabel(cell, text="", font=(t.NUM, 11),
-                                     text_color=t.MUTED, anchor="e", height=15)
+                share = ctk.CTkLabel(
+                    cell, text="", font=(t.NUM, 11), text_color=t.MUTED, anchor="e", height=15
+                )
                 share.grid(row=1, column=0, sticky="e")
-                saved = ctk.CTkLabel(cell, text="", font=(t.NUM, 11),
-                                     text_color=t.GREEN, anchor="e", height=13)
+                saved = ctk.CTkLabel(
+                    cell, text="", font=(t.NUM, 11), text_color=t.GREEN, anchor="e", height=13
+                )
                 saved.grid(row=2, column=0, sticky="e")
                 cells["fee"], cells["fee_share"], cells["fee_saved"] = value, share, saved
 
             else:
                 bold = "bold" if key in ("mark", "pos", "par", "lado") else None
                 font = (t.NUM, 13, bold) if bold else (t.NUM, 13)
-                lbl = ctk.CTkLabel(frame, text="", font=font, text_color=t.TEXT,
-                                   anchor=anchor, width=width)
+                lbl = ctk.CTkLabel(
+                    frame, text="", font=font, text_color=t.TEXT, anchor=anchor, width=width
+                )
                 lbl.grid(row=0, column=col, sticky="ew", padx=(6, 2))
                 cells[key] = lbl
             col += 1
@@ -294,13 +361,19 @@ class PositionsTable(ctk.CTkFrame):
         frame.grid_columnconfigure(col, minsize=0, weight=1)
         col += 1
         frame.grid_columnconfigure(col, minsize=ACTION_W, weight=0)
-        acts = CloseBar(frame,
-                        on_close=lambda info, pos=p: self.on_close(pos, info),
-                        on_reverse=lambda pos=p: self.on_reverse(pos))
+        acts = CloseBar(
+            frame,
+            on_close=lambda info, pos=p: self.on_close(pos, info),
+            on_reverse=lambda pos=p: self.on_reverse(pos),
+        )
         acts.grid(row=0, column=col, padx=(4, 6), sticky="e")
 
         self.rows[p.get("positionId")] = {
-            "frame": frame, "labels": cells, "var": var, "data": p, "bar": acts,
+            "frame": frame,
+            "labels": cells,
+            "var": var,
+            "data": p,
+            "bar": acts,
         }
         self._fill(self.rows[p.get("positionId")], p)
 
@@ -324,22 +397,21 @@ class PositionsTable(ctk.CTkFrame):
         labels["par"].configure(text=p.get("_name") or p.get("symbol", ""))
         labels["lado"].configure(
             text=f"{p.get('leverage', '')}X {'LONG' if long_ else 'SHORT'}",
-            text_color=t.GREEN if long_ else t.RED)
+            text_color=t.GREEN if long_ else t.RED,
+        )
 
         labels["pos"].configure(text=f"{t.fmt_usdt(notional)} USDT" if notional else "—")
         labels["entrada"].configure(text=t.fmt_price(entry))
-        labels["mark"].configure(text=t.fmt_price(mark) if mark else "—",
-                                 text_color=t.MUTED)
+        labels["mark"].configure(text=t.fmt_price(mark) if mark else "—", text_color=t.MUTED)
         if mark:
             winning = mark > entry if long_ else mark < entry
             labels["mark"].configure(text_color=t.GREEN if winning else t.RED)
-        labels["liq"].configure(text=t.fmt_price(liq) if liq > 0 else "—",
-                                text_color=t.GOLD)
-        labels["ratio"].configure(text=f"{ratio:.2f}%" if ratio else "—",
-                                  text_color=t.GOLD if ratio >= 20 else t.TEXT)
+        labels["liq"].configure(text=t.fmt_price(liq) if liq > 0 else "—", text_color=t.GOLD)
+        labels["ratio"].configure(
+            text=f"{ratio:.2f}%" if ratio else "—", text_color=t.GOLD if ratio >= 20 else t.TEXT
+        )
 
-        labels["apertura"].configure(text=_fmt_when(p.get("createTime")),
-                                      text_color=t.MUTED)
+        labels["apertura"].configure(text=_fmt_when(p.get("createTime")), text_color=t.MUTED)
         labels["mar_val"].configure(text=f"{t.fmt_usdt(p.get('im'))} USDT")
         margin = float(p.get("im") or 0)
         roe = (pnl / margin * 100) if margin else 0.0
@@ -350,11 +422,11 @@ class PositionsTable(ctk.CTkFrame):
         labels["fee"].configure(text=f"{t.fmt_fee(fee)} USDT", text_color=_fee_color(fee))
         labels["fee_share"].configure(
             text=f"{t.fmt_share(fee / margin * 100 if margin else 0)} / "
-                 f"{t.fmt_share(fee / notional * 100 if notional else 0)}")
+            f"{t.fmt_share(fee / notional * 100 if notional else 0)}"
+        )
         # lowSaveTotalFee viene de MEXC y es exactamente su "Fees saved"
         saved = float(p.get("lowSaveTotalFee") or 0)
-        labels["fee_saved"].configure(
-            text=f"ahorro {t.fmt_fee(saved)}" if saved > 0 else "")
+        labels["fee_saved"].configure(text=f"ahorro {t.fmt_fee(saved)}" if saved > 0 else "")
 
         tp = float(p.get("_tp") or 0)
         sl = float(p.get("_sl") or 0)
@@ -415,14 +487,18 @@ class HistoryTable(ctk.CTkFrame):
         self.header = _Header(self, HIST_COLS)
         self.header.pack(fill="x")
 
-        self.body = ctk.CTkScrollableFrame(self, fg_color="transparent",
-                                           scrollbar_button_color=t.INPUT,
-                                           scrollbar_button_hover_color=t.BORDER)
+        self.body = ctk.CTkScrollableFrame(
+            self,
+            fg_color="transparent",
+            scrollbar_button_color=t.INPUT,
+            scrollbar_button_hover_color=t.BORDER,
+        )
         self.body.pack(fill="both", expand=True, pady=(4, 0))
         self.body.grid_columnconfigure(0, weight=1)
 
-        self.empty = ctk.CTkLabel(self.body, text="Sin operaciones registradas",
-                                  font=(t.UI, 13), text_color=t.MUTED)
+        self.empty = ctk.CTkLabel(
+            self.body, text="Sin operaciones registradas", font=(t.UI, 13), text_color=t.MUTED
+        )
         self.empty.grid(row=0, column=0, pady=30)
 
     def render(self, orders):
@@ -455,15 +531,14 @@ class HistoryTable(ctk.CTkFrame):
             "precio": (t.fmt_price(o.get("dealAvgPrice") or o.get("price")), t.TEXT),
             "pnl": (t.fmt_pnl(pnl), _pnl_color(pnl)),
             "fee": (t.fmt_fee(fee), _fee_color(fee)),
-            "estado": (STATES.get(state, str(state)),
-                       t.GREEN if state == 3 else t.MUTED),
+            "estado": (STATES.get(state, str(state)), t.GREEN if state == 3 else t.MUTED),
         }
 
         for col, (key, _, width, anchor) in enumerate(HIST_COLS):
             frame.grid_columnconfigure(col, minsize=width + 8, weight=0)
             text, color = values[key]
-            ctk.CTkLabel(frame, text=text, font=(t.NUM, 13), text_color=color,
-                         anchor=anchor, width=width).grid(
-                row=0, column=col, sticky="ew", padx=(6, 2), pady=5)
+            ctk.CTkLabel(
+                frame, text=text, font=(t.NUM, 13), text_color=color, anchor=anchor, width=width
+            ).grid(row=0, column=col, sticky="ew", padx=(6, 2), pady=5)
 
         self.rows[o.get("orderId")] = frame

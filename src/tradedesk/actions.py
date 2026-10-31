@@ -2,12 +2,13 @@
 
 Se mezcla en App (mixin) porque todo depende de su estado: cliente, cola, tabla.
 """
+
 import threading
 import time
 
-import dialog
-import theme as t
-from mexc import MexcError, close_vol, plan_tp_sl
+from . import dialog
+from . import theme as t
+from .mexc import MexcError, close_vol, plan_tp_sl
 
 
 class ActionsMixin:
@@ -21,12 +22,18 @@ class ActionsMixin:
         price = info.get("price") or None
         vol = close_vol(pos.get("holdVol"), pct)
         if vol < 1:
-            dialog.show(self.root, "Cantidad invalida",
-                        f"Ese {pct:.0f}% deja 0 contratos: la posicion tiene "
-                        f"{t.fmt_qty(pos.get('holdVol'))}. Sube el porcentaje.")
+            dialog.show(
+                self.root,
+                "Cantidad invalida",
+                f"Ese {pct:.0f}% deja 0 contratos: la posicion tiene "
+                f"{t.fmt_qty(pos.get('holdVol'))}. Sube el porcentaje.",
+            )
             return
-        tipo = (f"Límite {t.fmt_price_exact(price, pos.get('_priceScale') or 2)}"
-                if price else "Mercado")
+        tipo = (
+            f"Límite {t.fmt_price_exact(price, pos.get('_priceScale') or 2)}"
+            if price
+            else "Mercado"
+        )
         rows = [
             ("Par", pos.get("symbol")),
             ("Lado", "LONG" if int(pos.get("positionType") or 1) == 1 else "SHORT"),
@@ -36,13 +43,14 @@ class ActionsMixin:
         ]
         if pct < 100:
             rows.append(("Queda", f"{100 - pct:.0f}% abierto"))
-        warn = ("Orden límite: puede quedar sin llenar." if price
-                else "Se cierra a mercado.")
-        if not dialog.confirm(self.root, "Cerrar posicion", rows=rows, warn=warn,
-                              danger=True, ok_text="Cerrar"):
+        warn = "Orden límite: puede quedar sin llenar." if price else "Se cierra a mercado."
+        if not dialog.confirm(
+            self.root, "Cerrar posicion", rows=rows, warn=warn, danger=True, ok_text="Cerrar"
+        ):
             return
-        threading.Thread(target=self._do_close, args=([pos],),
-                         kwargs={"vol": vol, "price": price}, daemon=True).start()
+        threading.Thread(
+            target=self._do_close, args=([pos],), kwargs={"vol": vol, "price": price}, daemon=True
+        ).start()
 
     def _close_selected(self):
         positions = self.table.selected()
@@ -52,23 +60,28 @@ class ActionsMixin:
         if self.var_dry.get():
             self._status(f"DRY-RUN: no se cerro {len(positions)} posicion(es)")
             return
-        if not dialog.confirm(self.root, f"Cerrar {len(positions)} posicion(es)",
-                              rows=[(p.get("symbol"), t.fmt_qty(p.get("holdVol")))
-                                    for p in positions],
-                              warn="Se cierran a mercado.", danger=True, ok_text="Cerrar"):
+        if not dialog.confirm(
+            self.root,
+            f"Cerrar {len(positions)} posicion(es)",
+            rows=[(p.get("symbol"), t.fmt_qty(p.get("holdVol"))) for p in positions],
+            warn="Se cierran a mercado.",
+            danger=True,
+            ok_text="Cerrar",
+        ):
             return
         threading.Thread(target=self._do_close, args=(positions,), daemon=True).start()
 
     def _do_close(self, positions, vol=None, price=None):
         failed, done = [], 0
-        single = len(positions) == 1   # solo el cierre de una fila lleva vol/precio
+        single = len(positions) == 1  # solo el cierre de una fila lleva vol/precio
         for i, pos in enumerate(positions):
             try:
-                self.mx.close_position(pos, vol if single else None,
-                                       price if single else None)
+                self.mx.close_position(pos, vol if single else None, price if single else None)
                 done += 1
-                self._log(f"OK  cerrada {pos.get('symbol')} vol={vol or pos.get('holdVol')}"
-                          f"{' limite ' + str(price) if price else ''}")
+                self._log(
+                    f"OK  cerrada {pos.get('symbol')} vol={vol or pos.get('holdVol')}"
+                    f"{' limite ' + str(price) if price else ''}"
+                )
             except Exception as e:
                 failed.append(f"{pos.get('symbol')}: {e}")
                 self._log(f"ERR cerrar {pos.get('symbol')}: {e}")
@@ -84,12 +97,18 @@ class ActionsMixin:
         if self.var_dry.get():
             self._status(f"DRY-RUN: no se revirtio {pos.get('symbol')}")
             return
-        if not dialog.confirm(self.root, "Reverse", rows=[
+        if not dialog.confirm(
+            self.root,
+            "Reverse",
+            rows=[
                 ("Par", pos.get("symbol")),
                 ("Lado actual", "LONG" if int(pos.get("positionType") or 1) == 1 else "SHORT"),
                 ("Qty", t.fmt_qty(pos.get("holdVol"))),
-        ], warn="Cierra la posicion y abre la contraria, al mercado.",
-                danger=True, ok_text="Reverse"):
+            ],
+            warn="Cierra la posicion y abre la contraria, al mercado.",
+            danger=True,
+            ok_text="Reverse",
+        ):
             return
 
         def run():
@@ -108,10 +127,14 @@ class ActionsMixin:
         if self.var_dry.get():
             self._status("DRY-RUN: no se cerro nada")
             return
-        if not dialog.confirm(self.root, "Cerrar TODO",
-                              rows=[("Posiciones", self.table.checked_count() or "todas")],
-                              warn="Se cierran TODAS las posiciones a mercado.\nNo se puede deshacer.",
-                              danger=True, ok_text="Cerrar todo"):
+        if not dialog.confirm(
+            self.root,
+            "Cerrar TODO",
+            rows=[("Posiciones", self.table.checked_count() or "todas")],
+            warn="Se cierran TODAS las posiciones a mercado.\nNo se puede deshacer.",
+            danger=True,
+            ok_text="Cerrar todo",
+        ):
             return
 
         def run():
@@ -133,20 +156,23 @@ class ActionsMixin:
         long_ = int(pos.get("positionType") or 1) == 1
         lado = ("SL debajo" if long_ else "SL arriba") if price else "SL en contra"
         res = dialog.form(
-            self.root, f"TP / SL · {pos.get('symbol')}",
-            [("tp", "Take profit", pos.get("_tp") or ""),
-             ("sl", "Stop loss", pos.get("_sl") or "")],
+            self.root,
+            f"TP / SL · {pos.get('symbol')}",
+            [
+                ("tp", "Take profit", pos.get("_tp") or ""),
+                ("sl", "Stop loss", pos.get("_sl") or ""),
+            ],
             ok_text="Guardar",
             note=f"Qty {t.fmt_qty(pos.get('holdVol'))} contratos · "
-                 f"precio actual {t.fmt_price(price) if price else '—'} ({lado})")
+            f"precio actual {t.fmt_price(price) if price else '—'} ({lado})",
+        )
         if res is None:
             return
         try:
             tp = float(res["tp"]) if res["tp"] else None
             sl = float(res["sl"]) if res["sl"] else None
         except ValueError:
-            dialog.show(self.root, "Numero invalido",
-                        "TP y SL deben ser numeros o quedar vacios.")
+            dialog.show(self.root, "Numero invalido", "TP y SL deben ser numeros o quedar vacios.")
             return
         threading.Thread(target=self._tpsl_worker, args=(pos, tp, sl), daemon=True).start()
 
@@ -165,8 +191,9 @@ class ActionsMixin:
                         raise
                 # el cancel es asincrono: recolocar de inmediato da 5004
                 if not self._wait_tpsl_clear(pos["positionId"]):
-                    raise MexcError("MEXC todavia esta cancelando la orden anterior. "
-                                    "Reintenta en un segundo.")
+                    raise MexcError(
+                        "MEXC todavia esta cancelando la orden anterior. Reintenta en un segundo."
+                    )
             if tp or sl:
                 self.mx.tpsl_place(pos["positionId"], pos["holdVol"], tp, sl)
             self._log(f"OK  tpsl {symbol} tp={tp} sl={sl}")
@@ -185,8 +212,11 @@ class ActionsMixin:
         end = time.time() + timeout
         while time.time() < end:
             try:
-                pendientes = [o for o in self.mx.tpsl_list()
-                              if int(o.get("positionId") or 0) == int(position_id)]
+                pendientes = [
+                    o
+                    for o in self.mx.tpsl_list()
+                    if int(o.get("positionId") or 0) == int(position_id)
+                ]
             except Exception:
                 pendientes = []
             if not pendientes:
@@ -200,9 +230,13 @@ class ActionsMixin:
             self._status("El margen solo se ajusta en modo aislado.")
             return
         # añadir margen tambien es gestion de riesgo: no lo bloquea DRY-RUN
-        res = dialog.form(self.root, f"Añadir margen · {pos.get('symbol')}",
-                          [("amount", "Monto (USDT)", "")], ok_text="Añadir",
-                          note=f"Margen actual {t.fmt_usdt(pos.get('im'))} USDT")
+        res = dialog.form(
+            self.root,
+            f"Añadir margen · {pos.get('symbol')}",
+            [("amount", "Monto (USDT)", "")],
+            ok_text="Añadir",
+            note=f"Margen actual {t.fmt_usdt(pos.get('im'))} USDT",
+        )
         if res is None:
             return
         try:

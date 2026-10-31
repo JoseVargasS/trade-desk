@@ -3,3 +3,10 @@ __pycache__/
 .venv/
 config.json
 *.log
+
+# herramientas
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/

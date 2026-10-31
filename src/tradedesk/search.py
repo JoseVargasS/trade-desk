@@ -1,10 +1,11 @@
 """Buscador de pares: filtro puro y ventana flotante de seleccion rapida."""
+
 import tkinter as tk
 
 import customtkinter as ctk
 
-import theme as t
-from mexc import display_name
+from . import theme as t
+from .mexc import display_name
 
 FAVORITOS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT"]
 
@@ -15,8 +16,10 @@ def _is_usdt(contract):
 
 def contract_line(c):
     # mismo nombre que muestra MEXC, no el simbolo crudo de la API
-    return (f"{display_name(c)}    {c.get('maxLeverage', '')}x    "
-            f"1 = {t.fmt_qty(c.get('contractSize'))} {c.get('baseCoin', '')}")
+    return (
+        f"{display_name(c)}    {c.get('maxLeverage', '')}x    "
+        f"1 = {t.fmt_qty(c.get('contractSize'))} {c.get('baseCoin', '')}"
+    )
 
 
 def filter_markets(markets, text, limit=60):
@@ -68,16 +71,32 @@ class SearchPopup(ctk.CTkToplevel):
 
         head = ctk.CTkFrame(wrap, fg_color="transparent")
         head.pack(fill="x", padx=14, pady=(12, 0))
-        ctk.CTkLabel(head, text=title, font=(t.UI, 14, "bold"),
-                     text_color=t.TEXT, anchor="w").pack(side="left")
-        ctk.CTkButton(head, text="✕", width=22, height=22, corner_radius=t.R_CHIP,
-                      fg_color="transparent", hover_color=t.BORDER, text_color=t.MUTED,
-                      font=(t.UI, 12), command=self.destroy).pack(side="right")
+        ctk.CTkLabel(head, text=title, font=(t.UI, 14, "bold"), text_color=t.TEXT, anchor="w").pack(
+            side="left"
+        )
+        ctk.CTkButton(
+            head,
+            text="✕",
+            width=22,
+            height=22,
+            corner_radius=t.R_CHIP,
+            fg_color="transparent",
+            hover_color=t.BORDER,
+            text_color=t.MUTED,
+            font=(t.UI, 12),
+            command=self.destroy,
+        ).pack(side="right")
 
-        self.entry = ctk.CTkEntry(wrap, placeholder_text="BTC, sol, eth…",
-                                  height=34, fg_color=t.INPUT, border_color=t.BORDER,
-                                  text_color=t.TEXT, placeholder_text_color=t.MUTED,
-                                  font=(t.NUM, 14))
+        self.entry = ctk.CTkEntry(
+            wrap,
+            placeholder_text="BTC, sol, eth…",
+            height=34,
+            fg_color=t.INPUT,
+            border_color=t.BORDER,
+            text_color=t.TEXT,
+            placeholder_text_color=t.MUTED,
+            font=(t.NUM, 14),
+        )
         self.entry.pack(fill="x", padx=14)
         self.entry.bind("<KeyRelease>", self._on_key)
         self.entry.bind("<Return>", self._choose_first)
@@ -85,9 +104,17 @@ class SearchPopup(ctk.CTkToplevel):
         self.entry.bind("<Up>", lambda e: self._move(-1))
 
         self.listbox = tk.Listbox(
-            wrap, bg=t.INPUT, fg=t.TEXT, selectbackground=t.SELECT,
-            selectforeground=t.TEXT, borderwidth=0, highlightthickness=0,
-            font=(t.NUM, 12), activestyle="none", exportselection=False)
+            wrap,
+            bg=t.INPUT,
+            fg=t.TEXT,
+            selectbackground=t.SELECT,
+            selectforeground=t.TEXT,
+            borderwidth=0,
+            highlightthickness=0,
+            font=(t.NUM, 12),
+            activestyle="none",
+            exportselection=False,
+        )
         self.listbox.pack(fill="both", expand=True, padx=14, pady=(8, 12))
         self.listbox.bind("<Double-Button-1>", self._choose_click)
         self.listbox.bind("<ButtonRelease-1>", self._choose_click)
@@ -156,8 +183,7 @@ class SearchPopup(ctk.CTkToplevel):
         if not self._results:
             return "break"
         current = self.listbox.curselection()
-        index = max(0, min((current[0] if current else 0) + delta,
-                           len(self._results) - 1))
+        index = max(0, min((current[0] if current else 0) + delta, len(self._results) - 1))
         self.listbox.selection_clear(0, "end")
         self.listbox.selection_set(index)
         self.listbox.activate(index)
