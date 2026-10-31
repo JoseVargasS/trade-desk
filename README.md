@@ -1,6 +1,6 @@
 # Trade Desk
 
-Ventana local para operar futuros de MEXC **a mercado**. Sin navegador, sin servidor, sin puertos abiertos.
+Ventana local para operar futuros de MEXC **a mercado o a límite**. Sin navegador, sin servidor, sin puertos abiertos.
 
 ## Arrancar
 
@@ -33,6 +33,9 @@ La app muestra tu IP arriba a la derecha, con botón para copiarla.
 - **Tamaño** + toggle `Margen` / `Nocional`:
   - `Margen` 100 a 10x → 1,000 USDT nocionales
   - `Nocional` 1,000 → 1,000 USDT nocionales
+- **Abrir a mercado o a límite**: el chip `Mercado ▾` al lado de *Tamaño* abre un panel con
+  `Mercado | Límite` y el precio (viene con el último). Si no lo tocas, la orden sale a
+  mercado; si eliges límite, puede quedar sin llenar y queda como orden pendiente.
 - **TP / SL**: opcionales. Vacíos = entra sin ellos. Ojo: MEXC mide la dirección contra el
   **precio actual**, no contra la entrada. Un SL puesto del lado de la ganancia (por encima
   del precio en un LONG) no es un stop loss para MEXC: la app lo guarda como **TP** y te avisa.

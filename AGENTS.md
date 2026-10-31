@@ -75,7 +75,9 @@ Decisiones de fondo que **no** están en discusión:
    modo de tamaño (Margen o Nocional) y escribe el **tamaño en USDT** (vacío por defecto).
 4. Opcional: TP y SL.
 5. Mira el resumen de la tarjeta: contratos, nocional real, fee estimada, liquidación L/S.
-6. `LONG` o `SHORT` → diálogo de confirmación → orden a mercado.
+6. `LONG` o `SHORT` → diálogo de confirmación → orden a mercado. El chip `Mercado ▾`
+   de la tarjeta (al lado de *Tamaño*) permite abrir **a límite**: escribe el precio y
+   la orden sale `type=1`; sin tocarlo sigue saliendo a mercado.
 7. Abajo, pestaña **Posiciones**: cada fila trae `[Mercado ▾]`, `[% ▾]` y el botón
    `Cerrar LONG` / `Cerrar SHORT` (del color del PnL). Sin tocar nada cierra **a mercado y
    al 100 %**, con el mismo diálogo de siempre; un precio en el primer campo la vuelve orden
@@ -161,7 +163,7 @@ GET  /api/v1/contract/ticker?symbol=BTC_USDT     precio (público)
 GET  /api/v1/contract/ticker                     todos los tickers (~250 KB, NO en loop)
 GET  /api/v1/contract/detail?symbol=BTC_USDT     contrato individual (fuente autoritativa)
 GET  /api/v1/contract/detail                     catálogo completo (1.171 pares)
-POST /api/v1/private/order/create                abrir/cerrar (type=5 mercado)
+POST /api/v1/private/order/create                abrir/cerrar (type=5 mercado, type=1 límite)
 POST /api/v1/private/position/close_all
 POST /api/v1/private/position/reverse            reversible nativo
 POST /api/v1/private/position/change_margin      ADD/SUB, solo aislado
@@ -184,7 +186,8 @@ rechace la orden por saldo insuficiente.
 
 **Cierre parcial y límite.** `close_vol(holdVol, pct)` hace floor al contrato entero, salvo
 100 %, que devuelve `holdVol` exacto (un cierre total no puede fallar por redondeo).
-`close_position(pos, vol, price)` reparte la orden: `price=None` → `type=5` (mercado);
+`open_market(..., price)` y `close_position(pos, vol, price)` reparten la orden:
+`price=None` → `type=5` (mercado);
 con precio → `type=1` y el precio redondeado a `priceScale` del contrato (si no, **2015**:
 "precisión inválida"). El precio con el que se manda se formatea con `theme.fmt_price_exact`,
 no con `fmt_price`, que recorta a 1 decimal desde 1000.
@@ -258,6 +261,10 @@ en la cabecera con botón para copiarla.
   abre el popup por la cola. Pedirlo en línea congelaba la ventana hasta 8 s.
 - El buscador es **modal** (`grab_set`): si quedaba abierto flotando sobre las tarjetas se
   comía los clics y parecía que los inputs estaban deshabilitados.
+- **Ningún `dialog.show`/`confirm` dentro de `_drain`.** Un modal ahí adentro congela el
+  callback todo el tiempo que el usuario lo deje abierto (`perf.log` llegó a registrar
+  drains de 1.6 s). Los avisos pasan por `App._notice`, que los encola y abre uno por vez
+  fuera del drain (`tests/test_app_notices.py`).
 
 ---
 
@@ -272,6 +279,7 @@ en la cabecera con botón para copiarla.
 | **Floor** en el tamaño | Nunca excede el nocional pedido; no rompe por margen insuficiente |
 | **Reverse nativo** | `POST /position/reverse` es atómico; hacerlo con dos órdenes deja ventanas de riesgo |
 | `sleep(0.6)` al cerrar varias | Límite de 4 órdenes / 2 s |
+| **Límite opcional al abrir** | El chip arranca en `Mercado` y no se guarda: una límite vieja aplicada a un precio nuevo es peligrosa |
 | **Cierre por defecto: mercado y 100 %** | Sin tocar los inputs se comporta igual que antes; el cierre parcial y el límite son opcionales |
 | **El % no se guarda** por fila | Un 30 % viejo aplicado a otra posición es riesgo; se reinicia a 100 % |
 | **El color del botón de cerrar sigue al PnL** | Es el dato que se mira antes de decidir; el lado va en el texto |
@@ -323,7 +331,8 @@ en la cabecera con botón para copiarla.
     que la posición queda a 0 (máx. 2.5 s) antes de volver a colocar.
 
 **Cómo diagnosticar un bloqueo de UI:** `perf.log` registra con hora cualquier callback
-de `_drain` que tarde más de 200 ms. Si el archivo tiene líneas, ahí está el culpable.
+de `_drain` que tarde más de 200 ms **y los mensajes que lo causaron**
+(`drain 1645 ms · history,positions`). Si el archivo tiene líneas, ahí está el culpable.
 
 ---
 

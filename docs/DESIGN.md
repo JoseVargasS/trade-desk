@@ -96,10 +96,10 @@ Semánticos:
 
 | Componente | Archivo | Notas |
 |---|---|---|
-| `TradeCard` | `cards.py` | par + apalancamiento + margen + tamaño + TP/SL + LONG/SHORT |
+| `TradeCard` | `cards.py` | par + apalancamiento + margen + tamaño (+ chip `Mercado ▾`) + TP/SL + LONG/SHORT |
 | `PositionsTable` | `table.py` | celdas compuestas con color, checkbox y `CloseBar` |
 | `CloseBar` | `closebar.py` | precio (Mercado / límite), % de la posición y los dos botones de la fila |
-| `_PercentPopup` / `_PricePopup` | `closebar.py` | paneles flotantes anclados al control que los abre |
+| `_PercentPopup` / `PricePopup` | `closebar.py` | paneles flotantes anclados al control que los abre (cierre y tarjeta de apertura) |
 | `Pencil` | `table.py` | lápiz dibujado en `Canvas`, sin glifo de fuente |
 | `HistoryTable` | `table.py` | solo lectura, 50 filas |
 | `SearchPopup` | `search.py` | ventana flotante, `Enter` toma el primero |
@@ -195,7 +195,7 @@ Reglas de color en tablas:
   `corner_radius = R_CARD`.
 - Siempre llevan ✕ propia y responden a `Escape`; el diálogo responde a `Enter`.
 - Se centran sobre la ventana padre al abrir, **excepto** los popups de la fila
-  (`_PercentPopup`, `_PricePopup`), que se anclan debajo del control que los abre porque
+  (`_PercentPopup`, `PricePopup`), que se anclan debajo del control que los abre porque
   el dato al que se refieren está en esa fila.
 
 ---
