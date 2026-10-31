@@ -10,20 +10,21 @@ from datetime import datetime
 import customtkinter as ctk
 
 import theme as t
+from closebar import CloseBar
 
 POS_COLS = (
     ("par", "Par", 132, "w"),
     ("lado", "Lado", 74, "w"),
-    ("apertura", "Apertura", 92, "w"),
-    ("pos", "Posición", 100, "e"),
+    ("apertura", "Apertura", 84, "w"),
+    ("pos", "Posición", 112, "e"),
     ("entrada", "Entrada", 94, "e"),
     ("mark", "Mark", 94, "e"),
     ("liq", "Liquidación", 100, "e"),
     ("ratio", "Margin ratio", 98, "e"),
-    ("margen", "Margen (USDT)", 132, "e"),
-    ("pnl", "PnL (USDT)", 122, "e"),
+    ("margen", "Margen", 132, "e"),
+    ("pnl", "PnL", 122, "e"),
     ("fee", "Fee · %mrg / pos", 140, "e"),
-    ("tpsl", "TP / SL", 196, "e"),
+    ("tpsl", "TP / SL", 188, "e"),
 )
 
 # columnas con lapiz: la cabecera reserva el mismo hueco para que el texto
@@ -293,20 +294,13 @@ class PositionsTable(ctk.CTkFrame):
         frame.grid_columnconfigure(col, minsize=0, weight=1)
         col += 1
         frame.grid_columnconfigure(col, minsize=ACTION_W, weight=0)
-        acts = ctk.CTkFrame(frame, fg_color="transparent")
+        acts = CloseBar(frame,
+                        on_close=lambda info, pos=p: self.on_close(pos, info),
+                        on_reverse=lambda pos=p: self.on_reverse(pos))
         acts.grid(row=0, column=col, padx=(4, 6), sticky="e")
-        ctk.CTkButton(acts, text="Cerrar", width=84, height=28, corner_radius=t.R_CHIP,
-                      fg_color=t.GREEN, hover_color="#18B374", text_color="#04140D",
-                      font=(t.UI, 13, "bold"),
-                      command=lambda pos=p: self.on_close(pos)).pack(side="left")
-        ctk.CTkButton(acts, text="Reverse", width=92, height=28, corner_radius=t.R_CHIP,
-                      fg_color=t.INPUT, hover_color=t.BORDER, border_width=1,
-                      border_color=t.BORDER, text_color=t.TEXT,
-                      font=(t.UI, 12),
-                      command=lambda pos=p: self.on_reverse(pos)).pack(side="left", padx=(6, 0))
 
         self.rows[p.get("positionId")] = {
-            "frame": frame, "labels": cells, "var": var, "data": p,
+            "frame": frame, "labels": cells, "var": var, "data": p, "bar": acts,
         }
         self._fill(self.rows[p.get("positionId")], p)
 
@@ -332,7 +326,7 @@ class PositionsTable(ctk.CTkFrame):
             text=f"{p.get('leverage', '')}X {'LONG' if long_ else 'SHORT'}",
             text_color=t.GREEN if long_ else t.RED)
 
-        labels["pos"].configure(text=t.fmt_usdt(notional) if notional else "—")
+        labels["pos"].configure(text=f"{t.fmt_usdt(notional)} USDT" if notional else "—")
         labels["entrada"].configure(text=t.fmt_price(entry))
         labels["mark"].configure(text=t.fmt_price(mark) if mark else "—",
                                  text_color=t.MUTED)
@@ -346,8 +340,7 @@ class PositionsTable(ctk.CTkFrame):
 
         labels["apertura"].configure(text=_fmt_when(p.get("createTime")),
                                       text_color=t.MUTED)
-        labels["mar_val"].configure(text=t.fmt_usdt(p.get("im")))
-
+        labels["mar_val"].configure(text=f"{t.fmt_usdt(p.get('im'))} USDT")
         margin = float(p.get("im") or 0)
         roe = (pnl / margin * 100) if margin else 0.0
         labels["pnl"].configure(text=f"{t.fmt_pnl(pnl)} USDT", text_color=_pnl_color(pnl))
@@ -383,6 +376,7 @@ class PositionsTable(ctk.CTkFrame):
             labels["sl"].configure(text="")
 
         row["data"] = p
+        row["bar"].set_context(p, pnl, mark or 0.0, notional)
 
     # -------------------------------------------------------------- refresco
     def render(self, positions):

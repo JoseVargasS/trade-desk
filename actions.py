@@ -7,23 +7,42 @@ import time
 
 import dialog
 import theme as t
-from mexc import MexcError, plan_tp_sl
+from mexc import MexcError, close_vol, plan_tp_sl
 
 
 class ActionsMixin:
     # ------------------------------------------------------------------ cierres
-    def _close_position(self, pos):
+    def _close_position(self, pos, info=None):
         if self.var_dry.get():
             self._status(f"DRY-RUN: no se cerro {pos.get('symbol')}")
             return
-        if not dialog.confirm(self.root, "Cerrar posicion", rows=[
-                ("Par", pos.get("symbol")),
-                ("Lado", "LONG" if int(pos.get("positionType") or 1) == 1 else "SHORT"),
-                ("Qty", t.fmt_qty(pos.get("holdVol"))),
-                ("PnL", t.fmt_pnl(pos.get("unRealizedPnl"))),
-        ], warn="Se cierra a mercado.", danger=True, ok_text="Cerrar"):
+        info = info or {}
+        pct = float(info.get("pct") or 100)
+        price = info.get("price") or None
+        vol = close_vol(pos.get("holdVol"), pct)
+        if vol < 1:
+            dialog.show(self.root, "Cantidad invalida",
+                        f"Ese {pct:.0f}% deja 0 contratos: la posicion tiene "
+                        f"{t.fmt_qty(pos.get('holdVol'))}. Sube el porcentaje.")
             return
-        threading.Thread(target=self._do_close, args=([pos],), daemon=True).start()
+        tipo = (f"Límite {t.fmt_price_exact(price, pos.get('_priceScale') or 2)}"
+                if price else "Mercado")
+        rows = [
+            ("Par", pos.get("symbol")),
+            ("Lado", "LONG" if int(pos.get("positionType") or 1) == 1 else "SHORT"),
+            ("Tipo", tipo),
+            ("Cerrar", f"{pct:.0f}% · {t.fmt_qty(vol)} contratos"),
+            ("PnL", t.fmt_pnl(pos.get("unRealizedPnl"))),
+        ]
+        if pct < 100:
+            rows.append(("Queda", f"{100 - pct:.0f}% abierto"))
+        warn = ("Orden límite: puede quedar sin llenar." if price
+                else "Se cierra a mercado.")
+        if not dialog.confirm(self.root, "Cerrar posicion", rows=rows, warn=warn,
+                              danger=True, ok_text="Cerrar"):
+            return
+        threading.Thread(target=self._do_close, args=([pos],),
+                         kwargs={"vol": vol, "price": price}, daemon=True).start()
 
     def _close_selected(self):
         positions = self.table.selected()
@@ -40,13 +59,16 @@ class ActionsMixin:
             return
         threading.Thread(target=self._do_close, args=(positions,), daemon=True).start()
 
-    def _do_close(self, positions):
+    def _do_close(self, positions, vol=None, price=None):
         failed, done = [], 0
+        single = len(positions) == 1   # solo el cierre de una fila lleva vol/precio
         for i, pos in enumerate(positions):
             try:
-                self.mx.close_position(pos)
+                self.mx.close_position(pos, vol if single else None,
+                                       price if single else None)
                 done += 1
-                self._log(f"OK  cerrada {pos.get('symbol')} vol={pos.get('holdVol')}")
+                self._log(f"OK  cerrada {pos.get('symbol')} vol={vol or pos.get('holdVol')}"
+                          f"{' limite ' + str(price) if price else ''}")
             except Exception as e:
                 failed.append(f"{pos.get('symbol')}: {e}")
                 self._log(f"ERR cerrar {pos.get('symbol')}: {e}")

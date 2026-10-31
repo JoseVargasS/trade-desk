@@ -19,7 +19,7 @@ import dialog
 import theme as t
 from actions import ActionsMixin
 from cards import TradeCard
-from mexc import Mexc, display_name
+from mexc import Mexc, decorate_positions, display_name
 from search import SearchPopup
 from table import HistoryTable, PositionsTable
 
@@ -351,27 +351,8 @@ class App(ActionsMixin):
             self.q.put(("status", f"historial: {e}"))
 
     def _decorate(self, positions):
-        """Agrega contractSize, el nombre de MEXC y el TP/SL vigente."""
-        for p in positions:
-            try:
-                contract = self.mx.contract(p["symbol"])
-                p["_contractSize"] = contract["contractSize"]
-                p["_name"] = display_name(contract)
-            except Exception:
-                p["_contractSize"] = 0
-                p["_name"] = p.get("symbol", "")
-        stops = {}
-        if positions:
-            try:
-                stops = {int(o.get("positionId") or 0): o for o in self.mx.tpsl_list()}
-            except Exception:
-                stops = {}
-        for p in positions:
-            stop = stops.get(int(p.get("positionId") or 0))
-            p["_tp"] = float(stop.get("takeProfitPrice") or 0) if stop else 0.0
-            p["_sl"] = float(stop.get("stopLossPrice") or 0) if stop else 0.0
-            p["_tpsl_id"] = stop.get("id") if stop else None
-        return positions
+        """contrato, nombre de MEXC y TP/SL vigente (ver mexc.decorate_positions)."""
+        return decorate_positions(self.mx, positions)
 
     def _refresh_positions(self):
         try:

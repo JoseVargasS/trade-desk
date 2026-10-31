@@ -49,6 +49,8 @@ Semánticos:
 | `ACCENT_SOFT` | `#26405F` | segmento activo, preset activo, botón primario suave |
 | `SELECT_SOFT` | `#1B2534` | reservado para hover de fila |
 | `ROW_ALT` | `#16191F` | fila alterna de tabla |
+| `GREEN_HOVER` / `RED_HOVER` | `#18B374` / `#E03A50` | hover de los botones llenos |
+| `ON_GREEN` / `ON_RED` | `#04140D` / `#150508` | texto oscuro sobre verde / rojo |
 
 `ACCENT_SOFT` existe porque un segmento activo del color del input se leía como
 "no seleccionado". No volver a usar `INPUT` para el estado activo.
@@ -81,10 +83,11 @@ Semánticos:
 - Radios: `R_CHIP = 6`, `R_CTRL = 8`, `R_CARD = 12`.
 - Padding interno de tarjeta: 12 px. Padding de ventana: 16 px.
 - Tarjeta de operación: **286 px de ancho, 486 px de alto** (fija).
-- Filas de tabla: **56 px** (posiciones: PnL en dos líneas y fee en tres, centrados
-  verticalmente sin tocar los bordes) y 38 px (historial). Cabecera: 36 px.
+- Filas de tabla: **56 px** (posiciones: PnL en dos líneas, fee en tres y la barra de
+  cierre en dos de 22/26 px, todo centrado verticalmente sin tocar los bordes) y 38 px
+  (historial). Cabecera: 36 px.
 - Ventana: **1800 × 1000** por defecto, mínimo **1760 × 860**. La fila de posiciones mide
-  1700 px; con menos de 1760 la tabla recorta la última columna en silencio (no hay scroll
+  1696 px; con menos de 1760 la tabla recorta la última columna en silencio (no hay scroll
   horizontal).
 ---
 
@@ -93,7 +96,9 @@ Semánticos:
 | Componente | Archivo | Notas |
 |---|---|---|
 | `TradeCard` | `cards.py` | par + apalancamiento + margen + tamaño + TP/SL + LONG/SHORT |
-| `PositionsTable` | `table.py` | celdas compuestas con color, checkbox y botón Cerrar |
+| `PositionsTable` | `table.py` | celdas compuestas con color, checkbox y `CloseBar` |
+| `CloseBar` | `closebar.py` | precio (Mercado / límite), % de la posición y los dos botones de la fila |
+| `_PercentPopup` / `_PricePopup` | `closebar.py` | paneles flotantes anclados al control que los abre |
 | `Pencil` | `table.py` | lápiz dibujado en `Canvas`, sin glifo de fuente |
 | `HistoryTable` | `table.py` | solo lectura, 50 filas |
 | `SearchPopup` | `search.py` | ventana flotante, `Enter` toma el primero |
@@ -107,12 +112,12 @@ Semánticos:
 | `Par` | nombre de MEXC (`GOLD(XAU)USDT`, de `baseCoinName + quoteCoin`), 13 bold |
 | `Lado` | `10X LONG` verde / `5X SHORT` rojo (apalancamiento incluido) |
 | `Apertura` | `dd/mm hh:mm` en `MUTED`, de `createTime` de `open_positions` |
-| `Posición` | nocional en USDT (`qty × contractSize × mark`), bold |
+| `Posición` | nocional con su unidad: `4,990.76 USDT`, bold |
 | `Entrada`, `Mark` | precio; Mark verde/rojo contra la entrada |
 | `Liquidación` | precio en `GOLD` |
 | `Margin ratio` | `0.50%`; `GOLD` desde 20 %. La cabecera dice **Margin ratio**, no `Margen %` |
-| `Margen (USDT)` | `502.11` bold + lápiz; la unidad vive en la cabecera |
-| `PnL (USDT)` | dos líneas: `-6.0976 USDT` en 13 bold y `ROE` (`-1.22%`) en `MUTED` 11 |
+| `Margen` | `500.69 USDT` bold + lápiz; la unidad va en el valor, no en la cabecera |
+| `PnL` | dos líneas: `-6.0976 USDT` en 13 bold y `ROE` (`-1.22%`) en `MUTED` 11 |
 | `Fee · %mrg / pos` | `0.9993 USDT` en 13 bold (color por signo), `0.20% / 0.02%` en `MUTED` 11 (parte del margen y del nocional) y `ahorro 1.7489` en `GREEN` 11 solo si `lowSaveTotalFee` > 0 |
 | `TP / SL` | todo alineado a la derecha: `3,990.5 / 3,880.2`, o `TP 3,990.5`, o `SL 3,880.2`, o `—`; lápiz al final |
 
@@ -132,13 +137,18 @@ no se muestra en la fila: se deduce del lápiz de margen, que aparece deshabilit
   que la cabecera reserva ese mismo hueco (`PENCIL_GUTTER`) con `width = ancho - 24` y
   `padx = (6, 26)`. Sin eso el título queda 24 px a la derecha del valor y la columna se ve
   torcida. Vale para las dos: cabecera y fila suman siempre `ancho + 8`.
-- Anchos: `par 132 · lado 74 · apertura 92 · pos 100 · entrada 94 · mark 94 · liq 100 ·
-  ratio 98 · margen 132 · pnl 122 · fee 140 · tpsl 196`, con +8 px de padding por columna
-  (1700 px de fila con checkbox y acciones). `Lado` está en 74 porque `10X LONG` ocupa ~62 px;
-  `Par` en 132 para que entre `GOLD(XAU)USDT`.
+- Anchos: `par 132 · lado 74 · apertura 84 · pos 112 · entrada 94 · mark 94 · liq 100 ·
+  ratio 98 · margen 132 · pnl 122 · fee 140 · tpsl 188`, con +8 px de padding por columna
+  (1696 px de fila con checkbox y acciones). `Lado` está en 74 porque `10X SHORT` ocupa
+  ~72 px; `Par` en 132 para que entre `GOLD(XAU)USDT` (107); `Posición` en 112 por el
+  sufijo `USDT` (108 en el peor caso); `Apertura` en 84 (74 reales); `TP / SL` en 188
+  (110 del par de precios + 24 del lápiz + separador).
 - Actualización en sitio; reconstrucción solo si cambia el conjunto de `positionId`.
 - Selección por **checkbox** por fila + checkbox maestro en la cabecera.
-- Columna de acciones (200 px): **Cerrar** en pastilla verde llena y **Reverse** con borde.
+- Columna de acciones (200 px): `CloseBar` en dos líneas dentro de los 190 útiles.
+  Línea 1: `[Mercado ▾]` (106) + `[100% ▾]` (78). Línea 2: `[Cerrar LONG/SHORT]` (102) +
+  `[Reverse]` (82). El botón de cerrar toma el color del PnL (verde, rojo o gris) y el texto
+  lleva el lado; el marcado del lado en la fila (`Lado`) no cambia.
   Los lápices viven dentro de su celda (Margen y TP/SL).
 - El `Pencil` se dibuja con `create_polygon` + `create_line` sobre un `Canvas` de 20 px:
   cuerpo inclinado 135°, banda y punta. Sin glifo Unicode (evita tofu y look genérico).
@@ -157,6 +167,7 @@ no se muestra en la fila: se deduce del lápiz de margen, que aparece deshabilit
 | Función | Salida | Uso |
 |---|---|---|
 | `fmt_price` | `78,549.5` / `2,239.10` / `0.90560` | precios, mark, liquidación |
+| `fmt_price_exact` | `2,246.39` | precio con los decimales del contrato (`priceScale`): en una orden límite lo que se ve es lo que se envía |
 | `fmt_pnl` | `+12.4021` / `-3.1502` | PnL, signo siempre, 4 decimales |
 | `fmt_fee` | `0.1997` | comisiones, 4 decimales |
 | `fmt_usdt` | `502.11` / `+502.11` | márgenes, nocional |
@@ -182,7 +193,9 @@ Reglas de color en tablas:
 - Diálogos y buscador son `overrideredirect(True)` con borde de 1 px (`LINE`) y
   `corner_radius = R_CARD`.
 - Siempre llevan ✕ propia y responden a `Escape`; el diálogo responde a `Enter`.
-- Se centran sobre la ventana padre al abrir.
+- Se centran sobre la ventana padre al abrir, **excepto** los popups de la fila
+  (`_PercentPopup`, `_PricePopup`), que se anclan debajo del control que los abre porque
+  el dato al que se refieren está en esa fila.
 
 ---
 

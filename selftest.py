@@ -6,7 +6,7 @@ import io
 import re
 
 import theme as t
-from mexc import Mexc, MexcError, display_name, plan_tp_sl
+from mexc import Mexc, MexcError, close_vol, display_name, plan_tp_sl
 from search import filter_markets
 
 # un worker corre en un hilo: si toca un widget, Tk se bloquea varios segundos
@@ -25,6 +25,35 @@ def check_workers_do_not_touch_widgets():
             if current and WIDGET_CALL.search(line):
                 raise AssertionError(
                     f"{name}:{number} {current} toca widgets desde un hilo: {line.strip()}")
+
+
+def check_close_orders():
+    """Cierre total, parcial y limite: el payload que saldria hacia MEXC."""
+    mx = Mexc()
+    mx.price = lambda symbol: 100.0
+    mx.contract = lambda symbol: {"priceScale": 2}
+    sent = {}
+    mx._post = lambda path, payload: sent.update(path=path, **payload)
+
+    pos = {"symbol": "XAU_USDT", "positionType": 2, "openType": 1, "holdVol": 22}
+    mx.close_position(pos)
+    assert sent["type"] == 5 and sent["vol"] == 22 and sent["price"] == 100.0, sent
+    assert sent["side"] == 2 and sent["openType"] == 1, sent          # short -> side 2
+
+    mx.close_position(pos, 7, 2246.394)
+    assert sent["type"] == 1 and sent["vol"] == 7, sent               # limite
+    assert sent["price"] == 2246.39, sent                             # precioScale = 2
+
+    mx.close_position(dict(pos, positionType=1, openType=2), 5)
+    assert sent["side"] == 4 and sent["type"] == 5 and sent["openType"] == 2, sent
+
+    for bad in (0, 23, -1):
+        try:
+            mx.close_position(pos, bad)
+        except MexcError:
+            pass
+        else:
+            raise AssertionError(f"deberia rechazar vol={bad}")
 
 
 def main():
@@ -121,6 +150,16 @@ def main():
     assert 0 < long_liq < px < short_liq, (long_liq, px, short_liq)
     assert abs((px - long_liq) / px - 0.099) < 0.01, "long liq ~ -10%"
     print(f"fee ok ({fee:.4f}) · liq ok ({long_liq:,.1f} / {short_liq:,.1f})")
+
+    # ------------------------------------------------- cierre total / parcial
+    assert close_vol(127, 100) == 127, "100% cierra la posicion exacta"
+    assert close_vol(127, None) == 127, "sin tocar nada = 100%"
+    assert close_vol(127, 50) == 63
+    assert close_vol(127, 33) == 41
+    assert close_vol(3, 10) == 0, "menos de un contrato: lo rechaza la accion"
+    assert close_vol(127, 150) == 127, "no se puede cerrar de mas"
+    check_close_orders()
+    print("cierre total / parcial / limite ok")
 
     print("SELFTEST OK")
 

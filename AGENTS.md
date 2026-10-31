@@ -35,8 +35,11 @@ Decisiones de fondo que **no** están en discusión:
 4. Opcional: TP y SL.
 5. Mira el resumen de la tarjeta: contratos, nocional real, fee estimada, liquidación L/S.
 6. `LONG` o `SHORT` → diálogo de confirmación → orden a mercado.
-7. Abajo, pestaña **Posiciones**: cierra con el botón de la fila, o marca checkboxes y
-   `Cerrar seleccionadas`, o `Reverse`, o `CERRAR TODO`.
+7. Abajo, pestaña **Posiciones**: cada fila trae `[Mercado ▾]`, `[% ▾]` y el botón
+   `Cerrar LONG` / `Cerrar SHORT` (del color del PnL). Sin tocar nada cierra **a mercado y
+   al 100 %**, con el mismo diálogo de siempre; un precio en el primer campo la vuelve orden
+   **límite** (puede quedar sin llenar) y el `%` permite cerrar una parte. También:
+   checkboxes + `Cerrar seleccionadas`, `Reverse` y `CERRAR TODO` (siempre a mercado).
 8. Pestaña **Historial**: últimas 50 órdenes (ejecutadas, canceladas, pendientes).
 
 `DRY-RUN` viene **siempre encendido** en cada arranque y bloquea **abrir, cerrar y reverse**.
@@ -48,21 +51,23 @@ abren exposición.
 ## 3. Arquitectura
 
 ```
-app.py     ventana, estado, pollers, preview            604 lineas
-actions.py cerrar, reverse, TP/SL, margen (mixin de App) 204
+app.py     ventana, estado, pollers, preview            585 lineas
+actions.py cerrar, reverse, TP/SL, margen (mixin de App) 226
 cards.py   TradeCard: una tarjeta por par                245
-table.py   PositionsTable + HistoryTable                 475
-search.py  SearchPopup + filter_markets()                182
+closebar.py precio + % de cierre + botones de la fila    288
+table.py   PositionsTable + HistoryTable                 470
+search.py  SearchPopup + filter_markets()                183
 dialog.py  confirm / show / ask_key (reemplazan messagebox) 244
-theme.py   color, tipografia, radios, formatos numericos 115
-mexc.py    firma, endpoints, USDT->contratos, fee, liq   348
+theme.py   color, tipografia, radios, formatos numericos 130
+mexc.py    firma, endpoints, USDT->contratos, fee, liq   406
 creds.py   Windows Credential Manager                    28
-selftest.py checks de logica pura                        129
+selftest.py checks de logica pura                        168
 check.py   diagnostico manual contra la cuenta real      31
 ```
 
 Ningún archivo debe pasar de ~600 líneas. Si se cruza, se divide por responsabilidad.
-`app.py` está justo en el límite (604): lo siguiente que se le agregue va a un módulo nuevo.
+`app.py` quedó en 585 después de mover `_decorate` a `mexc.decorate_positions()`:
+lo siguiente que se le agregue va a un módulo nuevo.
 
 ### Flujo de datos
 
@@ -129,6 +134,13 @@ en BTC obtienes 127 contratos = ~996 USDT. Se eligió floor y no "el más cercan
 redondear hacia arriba puede exigir más margen del que el usuario escribió y hacer que MEXC
 rechace la orden por saldo insuficiente.
 
+**Cierre parcial y límite.** `close_vol(holdVol, pct)` hace floor al contrato entero, salvo
+100 %, que devuelve `holdVol` exacto (un cierre total no puede fallar por redondeo).
+`close_position(pos, vol, price)` reparte la orden: `price=None` → `type=5` (mercado);
+con precio → `type=1` y el precio redondeado a `priceScale` del contrato (si no, **2015**:
+"precisión inválida"). El precio con el que se manda se formatea con `theme.fmt_price_exact`,
+no con `fmt_price`, que recorta a 1 decimal desde 1000.
+
 **`side`** (¡no es buy/sell!): `1` abre long, `2` cierra short, `3` abre short, `4` cierra long.
 
 **Rate limits** (documentados y comprobados):
@@ -183,7 +195,11 @@ en la cabecera con botón para copiarla.
   no tabular): las columnas van alineadas a la derecha, así que el borde derecho no se mueve.
   Se probó `Geist Mono` y se descartó por ~19 % más ancha. Se registran en el proceso con
   `AddFontResourceExW`; no se instalan en Windows.
-- Todo número se formatea con `theme.fmt_*`. PnL y fee con 4 decimales.
+- Todo número se formatea con `theme.fmt_*`. PnL y fee con 4 decimales; precios de orden
+  límite con `fmt_price_exact` (`priceScale` del contrato).
+- La fila de posiciones no crece: la barra de cierre va en dos líneas dentro de los 200 px
+  de la columna de acciones (`[Mercado ▾][100% ▾]` / `[Cerrar LONG][Reverse]`). Sus popups
+  se anclan bajo el control, no se centran, y son modales (`grab_set`) como el buscador.
 - Nada de `messagebox`: usar `dialog.confirm` / `dialog.show` / `dialog.ask_key`.
 - La tabla **no usa `ttk.Treeview`** (no permite color por celda).
 - `pack` reparte espacio en orden de llamada: lo que no debe encogerse va **primero**.
@@ -207,6 +223,9 @@ en la cabecera con botón para copiarla.
 | **Floor** en el tamaño | Nunca excede el nocional pedido; no rompe por margen insuficiente |
 | **Reverse nativo** | `POST /position/reverse` es atómico; hacerlo con dos órdenes deja ventanas de riesgo |
 | `sleep(0.6)` al cerrar varias | Límite de 4 órdenes / 2 s |
+| **Cierre por defecto: mercado y 100 %** | Sin tocar los inputs se comporta igual que antes; el cierre parcial y el límite son opcionales |
+| **El % no se guarda** por fila | Un 30 % viejo aplicado a otra posición es riesgo; se reinicia a 100 % |
+| **El color del botón de cerrar sigue al PnL** | Es el dato que se mira antes de decidir; el lado va en el texto |
 | **Cero dependencias de UI nuevas** | `customtkinter` + `httpx` + `keyring`. Nada de Qt (200 MB) |
 
 ---
@@ -263,7 +282,7 @@ de `_drain` que tarde más de 200 ms. Si el archivo tiene líneas, ahí está el
 ```powershell
 python app.py         # con consola, para ver errores
 python mexc.py        # self-check: red, contrato, conversion USDT->contratos
-python selftest.py    # formatos, busqueda USDT-first, fee, liquidacion
+python selftest.py    # formatos, busqueda USDT-first, fee, liquidacion, cierre parcial/limite
 python check.py       # consulta la cuenta real: saldo, posiciones, historial
 # perf.log registra cualquier callback de la UI que tarde > 200 ms
 ```
@@ -287,6 +306,8 @@ cerrar todas, DRY-RUN, historial, búsqueda, conversión de tamaño.
 
 **Sin probar contra posición real:** `Reverse` y el cierre desde el botón de la fila
 (la ruta existe y la firma está validada, pero no se ejecutó con posición abierta).
+El **cierre parcial** (`vol < holdVol`) y el **cierre límite** (`type=1`) están probados
+solo en el payload (`selftest.py`): falta ejecutarlos una vez contra una posición real.
 
 **Pendiente / ideas descartadas por ahora:**
 

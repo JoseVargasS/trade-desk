@@ -99,6 +99,49 @@ def fmt_plain(value):
     return f"{float(value):,.2f}"
 
 
+def close_vol(hold_vol, pct):
+    """Contratos a cerrar segun el % de la posicion.
+
+    100% devuelve la posicion exacta (sin redondeo: un cierre total nunca falla
+    por cantidad). Debajo, floor al contrato entero, que es el `volUnit` que
+    tienen los 1.171 pares de MEXC.
+    """
+    hold = float(hold_vol or 0)
+    pct = min(100.0, max(0.0, float(pct if pct is not None else 100)))
+    if pct >= 100:
+        return hold
+    return float(math.floor(hold * pct / 100))
+
+
+def decorate_positions(mx, positions):
+    """Agrega a cada posicion lo que `open_positions` no devuelve: contrato,
+    nombre de MEXC y el TP/SL vigente (que vive en otro endpoint)."""
+    for p in positions:
+        try:
+            contract = mx.contract(p["symbol"])
+            p["_contractSize"] = contract["contractSize"]
+            p["_volUnit"] = float(contract.get("volUnit") or 1)
+            p["_priceScale"] = int(contract.get("priceScale") or 2)
+            p["_name"] = display_name(contract)
+        except Exception:
+            p["_contractSize"] = 0
+            p["_volUnit"] = 1
+            p["_priceScale"] = 2
+            p["_name"] = p.get("symbol", "")
+    stops = {}
+    if positions:
+        try:
+            stops = {int(o.get("positionId") or 0): o for o in mx.tpsl_list()}
+        except Exception:
+            stops = {}
+    for p in positions:
+        stop = stops.get(int(p.get("positionId") or 0))
+        p["_tp"] = float(stop.get("takeProfitPrice") or 0) if stop else 0.0
+        p["_sl"] = float(stop.get("stopLossPrice") or 0) if stop else 0.0
+        p["_tpsl_id"] = stop.get("id") if stop else None
+    return positions
+
+
 class MexcError(Exception):
     pass
 
@@ -262,16 +305,31 @@ class Mexc:
                 payload["stopLossPrice"] = float(sl)
         return self._post("/api/v1/private/order/create", payload), vol, px
 
-    def close_position(self, pos):
-        px = self.price(pos["symbol"])
+    def close_position(self, pos, vol=None, price=None):
+        """Cierra toda la posicion o una parte (`vol` en contratos).
+
+        `price` vacio = a mercado (type 5). Con precio = orden limite (type 1)
+        a ese nivel, redondeado a los decimales que admite el contrato.
+        """
+        hold = float(pos["holdVol"])
+        vol = hold if vol is None else float(vol)
+        if not 0 < vol <= hold:
+            raise MexcError(f"Cantidad a cerrar invalida: {vol:g} de {hold:g} contratos.")
+        if price:
+            scale = int(self.contract(pos["symbol"]).get("priceScale") or 0)
+            px = round(float(price), scale)
+            order_type = 1
+        else:
+            px = self.price(pos["symbol"])
+            order_type = 5
         # 4 cierra long / 2 cierra short
         side = 4 if int(pos["positionType"]) == 1 else 2
         payload = {
             "symbol": pos["symbol"],
             "price": px,
-            "vol": float(pos["holdVol"]),
+            "vol": vol,
             "side": side,
-            "type": 5,
+            "type": order_type,
             "openType": int(pos["openType"]),
             "externalOid": uuid.uuid4().hex[:24],
         }

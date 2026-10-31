@@ -22,6 +22,12 @@ RED = "#F6465D"
 GOLD = "#FFD60A"
 BLUE = "#2196F3"
 
+# botones llenos: hover un paso mas oscuro y texto legible encima
+GREEN_HOVER = "#18B374"
+RED_HOVER = "#E03A50"
+ON_GREEN = "#04140D"
+ON_RED = "#150508"
+
 GREEN_TINT = "#0F1A15"
 RED_TINT = "#1C1214"
 
@@ -81,6 +87,15 @@ def fmt_price(value):
     if a >= 0.0001:
         return f"{v:.6f}"
     return f"{v:.8f}"
+
+
+def fmt_price_exact(value, scale=2):
+    """Precio con los decimales del contrato (priceScale): 2,246.39.
+
+    fmt_price recorta a 1 decimal desde 1000 y eso no sirve para una orden
+    limite: lo que se ve tiene que ser lo que se envia.
+    """
+    return f"{float(value or 0):,.{max(0, int(scale or 0))}f}"
 
 
 def fmt_pnl(value):
