@@ -50,15 +50,17 @@ La app muestra tu IP arriba a la derecha, con botón para copiarla.
 
 | Acción | Cómo |
 |---|---|
-| Cerrar una | botón **Cerrar** al final de la fila |
+| Cerrar una | botón **Cerrar LONG / SHORT** al final de la fila (toma el color del PnL) |
+| Cerrar una parte | campo `%` de la fila: abre el slider con `Cerrable / Cierras / Mínimo` |
+| Cerrar a precio límite | campo `Mercado` de la fila: elige `Límite` y escribe el precio |
 | Cerrar varias | marca los checkboxes → **Cerrar seleccionadas (N)** |
-| Reverse | marca una sola → **Reverse** (endpoint nativo de MEXC) |
+| Reverse | botón **Reverse** en la fila (endpoint nativo de MEXC) |
 | Cerrar todo | botón **CERRAR TODO** con confirmación |
 
-El checkbox del encabezado marca/desmarca todas. La tabla se refresca cada 3 s y
-mantiene tu selección. PnL y fee van con color (verde ganancia, rojo pérdida/costo), con su
-importe en USDT, el % que representan del margen y del nocional, y el **ahorro de fees**
-cuando MEXC lo reporta (`lowSaveTotalFee`).
+Sin tocar los dos campos, el botón cierra **a mercado y al 100 %**. El checkbox del encabezado
+marca/desmarca todas. La tabla se refresca cada 3 s y mantiene tu selección. PnL y fee van con
+color (verde ganancia, rojo pérdida/costo), con su importe en USDT, el % que representan del
+margen y del nocional, y el **ahorro de fees** cuando MEXC lo reporta (`lowSaveTotalFee`).
 
 **Pestaña Historial**
 
@@ -86,22 +88,38 @@ cantidad, precio, PnL, fee y estado. Se refresca cada 15 s mientras esté abiert
 
 ## Estructura
 
-- `app.py` — ventana, estado, pollers, órdenes
-- `cards.py` — tarjeta de operación
-- `table.py` — tablas de posiciones e historial
-- `search.py` — buscador de pares
-- `dialog.py` — diálogos de confirmación y aviso
-- `theme.py` — tokens de color, fuente y formatos
-- `mexc.py` — firma HMAC, endpoints, USDT → contratos, fee, liquidación
-- `creds.py` — Windows Credential Manager
-- `docs/DESIGN.md` — sistema de diseño
-- `AGENTS.md` — reglas para agentes
+```
+app.py                  lanzador (lo que abre el acceso directo)
+src/tradedesk/          la app
+  app.py                ventana, estado, pollers, órdenes
+  actions.py            cerrar, reverse, TP/SL, margen
+  cards.py              tarjeta de operación
+  closebar.py           precio + % de cierre + botones de la fila
+  table.py              tablas de posiciones e historial
+  search.py             buscador de pares
+  dialog.py             diálogos de confirmación y aviso
+  theme.py              tokens de color, fuente y formatos
+  mexc.py               firma HMAC, endpoints, USDT → contratos, fee, liquidación
+  creds.py              Windows Credential Manager
+  paths.py              dónde viven los datos y los assets
+  assets/               iconos y fuentes Geist
+tests/                  pruebas (pytest)
+tools/                  utilidades: icono, chequeos contra la API y la cuenta
+docs/DESIGN.md          sistema de diseño
+AGENTS.md               reglas para agentes
+```
 
-Requiere: `pip install httpx keyring customtkinter`
+Los datos (`config.json`, `trades.log`, `perf.log`) viven en la raíz del repo y git los ignora.
 
-Verificación rápida:
+Requiere Python 3.11+: `pip install -e ".[dev]"` (o `pip install customtkinter httpx keyring`).
+
+Verificación:
 
 ```powershell
-python mexc.py       # red, contrato, conversión de tamaño
-python selftest.py   # formatos, búsqueda, fee y liquidación
+scripts\check.bat             # lint + formato + tests
+python -m pytest              # solo los tests
+python -m pytest -m ui        # los de ventana (miden la fila)
+python tools/smoke_api.py     # red: precio, contrato, conversión de tamaño
+python tools/smoke_live.py 9  # abre la app 9 s con la cuenta real y la cierra
+python tools/check_account.py # consulta la cuenta: saldo, posiciones, historial
 ```

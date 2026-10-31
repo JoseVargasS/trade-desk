@@ -5,6 +5,47 @@ Si algo aquí no coincide con el código, el código manda: corrige este archivo
 
 ---
 
+## 0. Cómo empezar a trabajar aquí
+
+**Dónde está cada cosa.** El código vive en `src/tradedesk/` (layout `src`), los tests en
+`tests/`, los assets **dentro del paquete** (`src/tradedesk/assets/`), los scripts sueltos en
+`tools/` y los datos del usuario (`config.json`, `trades.log`, `perf.log`) en la raíz del repo,
+nunca dentro del paquete: esas rutas las resuelve `tradedesk/paths.py`.
+
+**Arranque.** `app.py` en la raíz es **solo el lanzador** (el acceso directo del escritorio
+apunta a `pythonw app.py`): agrega `src` al path y llama a `tradedesk.__main__:main`. Los `.bat`
+hacen lo mismo con `python -m tradedesk`. No borres ni muevas `app.py` de la raíz sin actualizar
+el acceso directo, o la app deja de abrir con doble clic.
+
+**Entorno y verificación** (Windows, Python 3.11+):
+
+```powershell
+pip install -e ".[dev]"     # deps de la app + pytest/ruff/pre-commit
+python -m pytest            # 44 tests (~10 s); los `ui` se saltan sin ventana
+python -m ruff check .      # lint
+python -m ruff format .     # formato (obligatorio: CI corre --check)
+scripts\check.bat           # lint + formato + tests de una
+```
+
+**Reglas para no romper lo que ya funciona**
+
+- **La ruta de órdenes tiene red de seguridad**: `tests/test_mexc_orders.py` fija los payloads de
+  `open_market` y `close_position` (side, type, vol, precio redondeado a `priceScale`). Si cambias
+  un payload, cambia el test en el mismo commit. Nunca se prueba contra la cuenta real en tests.
+- **Ningún hilo toca widgets**: `tests/test_no_threaded_widgets.py` lee el fuente y falla si un
+  `*_worker` llama a `configure` / `set_*`. Los hilos solo hablan por `self.q`.
+- **La fila de posiciones no crece**: `tests/test_ui_smoke.py` mide anchos, alto y los cuatro
+  controles de la barra de cierre. Si se pasa, recorta columnas; no ensanches la ventana.
+- **Ruff mandó el formato**: los archivos ocupan ~15 % más líneas que antes (una llamada de
+  Tkinter con muchos argumentos queda un argumento por línea). El tope real ahora es **~700
+  líneas**; `app.py` está cerca, así que lo siguiente que se le agregue va a un módulo nuevo.
+- Colores, fuentes y formatos numéricos **solo** en `theme.py`.
+- Después de tocar UI: `python tools/smoke_live.py 9` (arranca 9 s, pinta las posiciones reales y
+  cierra sola; no envía órdenes).
+- Antes de commitear: `scripts\check.bat` en verde.
+
+---
+
 ## 1. Qué es y por qué existe
 
 App de escritorio Windows para operar **futuros de MEXC a mercado** (solo market orders).
@@ -51,23 +92,30 @@ abren exposición.
 ## 3. Arquitectura
 
 ```
-app.py     ventana, estado, pollers, preview            585 lineas
-actions.py cerrar, reverse, TP/SL, margen (mixin de App) 226
-cards.py   TradeCard: una tarjeta por par                245
-closebar.py precio + % de cierre + botones de la fila    288
-table.py   PositionsTable + HistoryTable                 470
-search.py  SearchPopup + filter_markets()                183
-dialog.py  confirm / show / ask_key (reemplazan messagebox) 244
-theme.py   color, tipografia, radios, formatos numericos 130
-mexc.py    firma, endpoints, USDT->contratos, fee, liq   406
-creds.py   Windows Credential Manager                    28
-selftest.py checks de logica pura                        168
-check.py   diagnostico manual contra la cuenta real      31
+raiz/
+  app.py                    lanzador del acceso directo (no tiene logica)
+  src/tradedesk/
+    __main__.py             arranque: AppUserModelID + CTk + App            25
+    paths.py                DATA_DIR (raiz) y ASSETS (paquete)             13
+    app.py                  ventana, estado, pollers, preview             690
+    actions.py              cerrar, reverse, TP/SL, margen (mixin)        260
+    cards.py                TradeCard: una tarjeta por par                 341
+    closebar.py             precio + % de cierre + botones de la fila     381
+    table.py                PositionsTable + HistoryTable                 544
+    search.py               SearchPopup + filter_markets()                209
+    dialog.py               confirm / show / ask_key (sin messagebox)     376
+    theme.py                color, tipografia, radios, formatos           132
+    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   414
+    creds.py                Windows Credential Manager                     29
+    assets/                 icon.ico, icon.png, fonts/*.ttf
+  tests/                    pytest: logica pura, payloads, UI (`-m ui`)
+  tools/                    make_icon, smoke_api, smoke_live, check_account
+  scripts/check.bat         lint + formato + tests
 ```
 
-Ningún archivo debe pasar de ~600 líneas. Si se cruza, se divide por responsabilidad.
-`app.py` quedó en 585 después de mover `_decorate` a `mexc.decorate_positions()`:
-lo siguiente que se le agregue va a un módulo nuevo.
+Ningún archivo debe pasar de **~700 líneas** (el formato de ruff suma ~15 % al conteo).
+Si se cruza, se divide por responsabilidad. `app.py` está cerca: lo siguiente que se le
+agregue va a un módulo nuevo.
 
 ### Flujo de datos
 
@@ -204,7 +252,8 @@ en la cabecera con botón para copiarla.
 - La tabla **no usa `ttk.Treeview`** (no permite color por celda).
 - `pack` reparte espacio en orden de llamada: lo que no debe encogerse va **primero**.
 - **Ningún worker toca widgets.** Los hilos solo hacen `q.put`; el hilo de la UI pinta.
-  Comprobado por `selftest.py`: un `configure`/`set_*` desde un hilo deja la ventana sorda.
+  Comprobado por `tests/test_no_threaded_widgets.py`: un `configure`/`set_*` desde un hilo
+  deja la ventana sorda.
 - **Ningún request desde el hilo de la UI.** `_open_search` carga el catálogo en un hilo y
   abre el popup por la cola. Pedirlo en línea congelaba la ventana hasta 8 s.
 - El buscador es **modal** (`grab_set`): si quedaba abierto flotando sobre las tarjetas se
@@ -262,7 +311,8 @@ en la cabecera con botón para copiarla.
 14. **Un worker tocando un widget deja la ventana sorda**: Tkinter no es thread-safe.
     Un `card.set_preview(...)` desde un hilo bloquea el bucle de eventos y la UI deja de
     responder varios segundos (se vio como "el input está deshabilitado y luego revive").
-    Los hilos **solo** hablan por `self.q`. `selftest.py` falla si un `*_worker` llama a
+    Los hilos **solo** hablan por `self.q`. `tests/test_no_threaded_widgets.py` falla si un
+    `*_worker` llama a
     `configure`, `set_*`, `insert` o `delete` sobre un widget.
 15. **TP/SL rechazado con 5003 en el caso más normal**: si entras en ganancia y pones el SL
     por encima del precio (LONG), MEXC lo rechaza porque ahí el único nivel válido es el TP.
@@ -280,16 +330,23 @@ de `_drain` que tarde más de 200 ms. Si el archivo tiene líneas, ahí está el
 ## 9. Cómo correr y verificar
 
 ```powershell
-python app.py         # con consola, para ver errores
-python mexc.py        # self-check: red, contrato, conversion USDT->contratos
-python selftest.py    # formatos, busqueda USDT-first, fee, liquidacion, cierre parcial/limite
-python check.py       # consulta la cuenta real: saldo, posiciones, historial
+python app.py                 # lanzador del acceso directo, con consola para ver errores
+python -m tradedesk           # lo mismo, con PYTHONPATH=src
+python -m pytest              # 44 tests: logica pura, payloads y UI
+python -m pytest -m ui        # solo los de ventana (miden la fila y los popups)
+python -m ruff check .        # lint
+python -m ruff format --check .   # formato (lo que corre el CI)
+scripts\check.bat             # las tres cosas juntas
+
+python tools/smoke_api.py     # red real: precio, contrato, USDT -> contratos
+python tools/check_account.py # consulta la cuenta real: saldo, posiciones, historial
+python tools/smoke_live.py 9  # arranca 9 s, pinta las posiciones y cierra sola
 # perf.log registra cualquier callback de la UI que tarde > 200 ms
 ```
 
 Antes de entregar un cambio:
 
-- [ ] `python mexc.py` y `python selftest.py` pasan.
+- [ ] `scripts\check.bat` pasa (lint + formato + tests).
 - [ ] La ventana abre sin excepciones y sin widgets cortados.
 - [ ] Colores/fuentes salen de `theme.py`; números por `theme.fmt_*`.
 - [ ] Los errores de API se ven en la UI, no se silencian.
@@ -307,7 +364,8 @@ cerrar todas, DRY-RUN, historial, búsqueda, conversión de tamaño.
 **Sin probar contra posición real:** `Reverse` y el cierre desde el botón de la fila
 (la ruta existe y la firma está validada, pero no se ejecutó con posición abierta).
 El **cierre parcial** (`vol < holdVol`) y el **cierre límite** (`type=1`) están probados
-solo en el payload (`selftest.py`): falta ejecutarlos una vez contra una posición real.
+solo en el payload (`tests/test_mexc_orders.py`): falta ejecutarlos una vez contra una
+posición real.
 
 **Pendiente / ideas descartadas por ahora:**
 
