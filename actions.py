@@ -7,6 +7,7 @@ import time
 
 import dialog
 import theme as t
+from mexc import MexcError, plan_tp_sl
 
 
 class ActionsMixin:
@@ -106,11 +107,16 @@ class ActionsMixin:
     # --------------------------------------------------------------- tp/sl
     def _edit_tpsl(self, pos):
         # el TP/SL es gestion de riesgo: se permite aunque DRY-RUN este activo
+        price = (self._prices or {}).get(pos.get("symbol")) or 0
+        long_ = int(pos.get("positionType") or 1) == 1
+        lado = ("SL debajo" if long_ else "SL arriba") if price else "SL en contra"
         res = dialog.form(
             self.root, f"TP / SL · {pos.get('symbol')}",
             [("tp", "Take profit", pos.get("_tp") or ""),
              ("sl", "Stop loss", pos.get("_sl") or "")],
-            ok_text="Guardar", note=f"Qty {t.fmt_qty(pos.get('holdVol'))} contratos")
+            ok_text="Guardar",
+            note=f"Qty {t.fmt_qty(pos.get('holdVol'))} contratos · "
+                 f"precio actual {t.fmt_price(price) if price else '—'} ({lado})")
         if res is None:
             return
         try:
@@ -123,17 +129,48 @@ class ActionsMixin:
         threading.Thread(target=self._tpsl_worker, args=(pos, tp, sl), daemon=True).start()
 
     def _tpsl_worker(self, pos, tp, sl):
+        symbol = pos.get("symbol")
         try:
+            price = self.mx.price(symbol)
+            long_ = int(pos.get("positionType") or 1) == 1
+            # MEXC mide la direccion contra el precio actual, no contra la entrada
+            tp, sl, avisos = plan_tp_sl(long_, price, tp, sl)
             if pos.get("_tpsl_id"):
-                self.mx.tpsl_cancel(pos["_tpsl_id"])
+                try:
+                    self.mx.tpsl_cancel(pos["_tpsl_id"])
+                except MexcError as e:
+                    if "ya no existe" not in str(e):
+                        raise
+                # el cancel es asincrono: recolocar de inmediato da 5004
+                if not self._wait_tpsl_clear(pos["positionId"]):
+                    raise MexcError("MEXC todavia esta cancelando la orden anterior. "
+                                    "Reintenta en un segundo.")
             if tp or sl:
                 self.mx.tpsl_place(pos["positionId"], pos["holdVol"], tp, sl)
-            self._log(f"OK  tpsl {pos.get('symbol')} tp={tp} sl={sl}")
-            self.q.put(("closed", f"TP/SL actualizado · {pos.get('symbol')}"))
+            self._log(f"OK  tpsl {symbol} tp={tp} sl={sl}")
+            msg = f"TP/SL actualizado · {symbol}"
+            self.q.put(("closed", msg))
+            if avisos:
+                self.q.put(("notice", ("SL en ganancia", "\n\n".join(avisos), False)))
         except Exception as e:
-            self._log(f"ERR tpsl {pos.get('symbol')}: {e}")
+            self._log(f"ERR tpsl {symbol}: {e}")
             self.q.put(("closed", f"Error TP/SL: {e}"))
+            self.q.put(("notice", ("TP / SL rechazado", str(e), True)))
         self._refresh_positions()
+
+    def _wait_tpsl_clear(self, position_id, timeout=2.5):
+        """Espera a que MEXC suelte el TP/SL cancelado de esa posicion."""
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                pendientes = [o for o in self.mx.tpsl_list()
+                              if int(o.get("positionId") or 0) == int(position_id)]
+            except Exception:
+                pendientes = []
+            if not pendientes:
+                return True
+            time.sleep(0.25)
+        return False
 
     # ---------------------------------------------------------------- margen
     def _add_margin(self, pos):

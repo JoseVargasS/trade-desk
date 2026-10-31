@@ -15,6 +15,8 @@ class TradeCard(ctk.CTkFrame):
                          border_width=1, border_color=t.LINE, width=WIDTH, height=486)
         self.grid_propagate(False)
         self.grid_columnconfigure(0, weight=1)
+        # el simbolo crudo es el que opera; el boton muestra el nombre de MEXC
+        self._symbol = symbol
         self._lev_lock = False
         self.on_remove = on_remove
         self.on_symbol = on_symbol
@@ -152,7 +154,7 @@ class TradeCard(ctk.CTkFrame):
     # ------------------------------------------------------------------ estado
     @property
     def symbol(self):
-        return self.btn_symbol.cget("text")
+        return self._symbol
 
     def config(self):
         # el tamaño no se guarda: cada sesion arranca vacia a proposito
@@ -194,10 +196,15 @@ class TradeCard(ctk.CTkFrame):
         }
 
     def set_symbol(self, symbol):
+        self._symbol = symbol
         self.btn_symbol.configure(text=symbol)
         self.lbl_price.configure(text="—")
         self.lbl_change.configure(text="")
         self._changed()
+
+    def set_name(self, name):
+        """Nombre tal como lo muestra MEXC: GOLD(XAU)USDT."""
+        self.btn_symbol.configure(text=name or self._symbol)
 
     def set_price(self, price, change):
         self.lbl_price.configure(text=t.fmt_price(price))

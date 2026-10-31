@@ -48,20 +48,21 @@ abren exposición.
 ## 3. Arquitectura
 
 ```
-app.py     ventana, estado, pollers, preview            ~560 lineas
-actions.py cerrar, reverse, TP/SL, margen (mixin de App) ~176
-cards.py   TradeCard: una tarjeta por par                ~240
-table.py   PositionsTable + HistoryTable                 ~285
-search.py  SearchPopup + filter_markets()                ~165
-dialog.py  confirm / show / ask_key (reemplazan messagebox) ~175
-theme.py   color, tipografia, radios, formatos numericos ~107
-mexc.py    firma, endpoints, USDT->contratos, fee, liq   ~250
-creds.py   Windows Credential Manager                    ~30
-selftest.py checks de logica pura                        ~76
-check.py   diagnostico manual contra la cuenta real      ~31
+app.py     ventana, estado, pollers, preview            604 lineas
+actions.py cerrar, reverse, TP/SL, margen (mixin de App) 204
+cards.py   TradeCard: una tarjeta por par                245
+table.py   PositionsTable + HistoryTable                 475
+search.py  SearchPopup + filter_markets()                182
+dialog.py  confirm / show / ask_key (reemplazan messagebox) 244
+theme.py   color, tipografia, radios, formatos numericos 115
+mexc.py    firma, endpoints, USDT->contratos, fee, liq   348
+creds.py   Windows Credential Manager                    28
+selftest.py checks de logica pura                        129
+check.py   diagnostico manual contra la cuenta real      31
 ```
 
 Ningún archivo debe pasar de ~600 líneas. Si se cruza, se divide por responsabilidad.
+`app.py` está justo en el límite (604): lo siguiente que se le agregue va a un módulo nuevo.
 
 ### Flujo de datos
 
@@ -70,8 +71,8 @@ cada 120 ms). Ningún hilo toca widgets.
 
 ```
 hilo _poll  ──►  q.put(("ticker", ...))      precio por tarjeta, round-robin
-             ──►  q.put(("positions", ...))   cada 2.5 s
-             ──►  q.put(("orders", ...))      órdenes abiertas, cada 2.5 s
+             ──►  q.put(("positions", ...))   cada 3 s
+             ──►  q.put(("orders", ...))      órdenes abiertas, cada 3 s
              ──►  q.put(("history", ...))     cada 15 s, solo en su pestaña
 hilo _calc  ──►  q.put(("preview", ...))     contratos/fee/liq por tarjeta
 hilo orden  ──►  q.put(("order", ...))       resultado de la orden
@@ -140,8 +141,15 @@ rechace la orden por saldo insuficiente.
 | change_leverage | 10 / 10 s |
 | posiciones / órdenes | 20 / 2 s |
 
-El poller va a **~2.2 req/s** con backoff multiplicativo (0.45 s → 3 s) si algo falla.
-Subirlo produce `510 Demasiadas peticiones`.
+El poller va a **~1.4 req/s** (delay base 0.70 s) con backoff multiplicativo
+(0.70 s → 5.0 s) si algo falla. Subirlo produce `510 Demasiadas peticiones`.
+
+**TP/SL: la dirección se mide contra el precio actual, no contra la entrada.**
+LONG → TP por encima y SL por debajo; SHORT al revés. Un `stopLossPrice` del lado
+de la ganancia se rechaza con **5003** aunque esté lejos; ese mismo nivel sí entra
+como `takeProfitPrice`. `mexc.plan_tp_sl()` aplica la regla antes de enviar.
+El `stoporder/cancel` es **asíncrono**: recolocar de inmediato da **5004**
+("greater than the closable amount"), por eso se espera a que la lista quede vacía.
 
 **Idempotencia.** Cada orden lleva `externalOid` único. Si la red falla y se reintenta, MEXC
 rechaza el duplicado en vez de abrir dos posiciones.
@@ -171,7 +179,9 @@ en la cabecera con botón para copiarla.
 ## 6. Reglas de UI (resumen; el detalle está en `docs/DESIGN.md`)
 
 - Tokens **solo** en `theme.py`. Ningún color o fuente literal en otro archivo.
-- UI en `Geist`, **todo número en `Geist Mono`** (tabular). Se registran en el proceso con
+- UI en `Geist`, **todo número en `theme.NUM`**, que es la misma familia (proporcional,
+  no tabular): las columnas van alineadas a la derecha, así que el borde derecho no se mueve.
+  Se probó `Geist Mono` y se descartó por ~19 % más ancha. Se registran en el proceso con
   `AddFontResourceExW`; no se instalan en Windows.
 - Todo número se formatea con `theme.fmt_*`. PnL y fee con 4 decimales.
 - Nada de `messagebox`: usar `dialog.confirm` / `dialog.show` / `dialog.ask_key`.
@@ -216,8 +226,9 @@ en la cabecera con botón para copiarla.
    fijar `SetCurrentProcessExplicitAppUserModelID` **antes** de crear la ventana.
 8. **`CTkEntry` con `placeholder_text` no acepta tecleo**: el placeholder se escribe como
    texto real y el clic en el `tk.Entry` interno no siempre lo limpia; el campo queda sordo.
-   Todos los campos usan **`textvariable` sin placeholder** y una etiqueta aparte.
-   (El de apalancamiento siempre funcionó porque nunca tuvo placeholder.)
+   Los campos de las tarjetas y de los formularios usan **`textvariable` sin placeholder**
+   y una etiqueta aparte. La excepción son el buscador y el diálogo de API key: ahí el
+   foco se fuerza al abrir, así que el placeholder nunca queda delante del cursor.
 9. **Chip del par encima de la ✕**: empacar la ✕ primero (`side="right"`) y el chip con
    `fill="x", expand=True`.
 10. **Selección perdida en cada refresco**: se restaura por `positionId`, no por `iid`.
@@ -234,6 +245,13 @@ en la cabecera con botón para copiarla.
     responder varios segundos (se vio como "el input está deshabilitado y luego revive").
     Los hilos **solo** hablan por `self.q`. `selftest.py` falla si un `*_worker` llama a
     `configure`, `set_*`, `insert` o `delete` sobre un widget.
+15. **TP/SL rechazado con 5003 en el caso más normal**: si entras en ganancia y pones el SL
+    por encima del precio (LONG), MEXC lo rechaza porque ahí el único nivel válido es el TP.
+    `plan_tp_sl()` lo mueve a TP y avisa por diálogo; si el TP ya está en ese lado, explica
+    que deje el SL del lado de la pérdida en vez de mostrar el error en inglés.
+16. **TP/SL rechazado con 5004 al reemplazar**: cancelar y recolocar sin esperar deja la
+    orden vieja contabilizada. `_wait_tpsl_clear()` sondea `stoporder/list/orders` hasta
+    que la posición queda a 0 (máx. 2.5 s) antes de volver a colocar.
 
 **Cómo diagnosticar un bloqueo de UI:** `perf.log` registra con hora cualquier callback
 de `_drain` que tarde más de 200 ms. Si el archivo tiene líneas, ahí está el culpable.
@@ -272,8 +290,7 @@ cerrar todas, DRY-RUN, historial, búsqueda, conversión de tamaño.
 
 **Pendiente / ideas descartadas por ahora:**
 
-- Mostrar TP/SL activos de cada posición (MEXC no los devuelve en `open_positions`; habría que
-  cruzar con `stoporder`).
+- Guardar más de un TP parcial por posición (MEXC admite un TP y un SL por stop order).
 - Saldo disponible en la cabecera (`mx.assets()` ya existe, falta pintarlo).
 - Otros exchanges: **Bitunix** y **BingX** (documentados en la conversación de origen).
   Bitunix: firma SHA256 doble, TP/SL en la misma orden, sin close-all.

@@ -12,18 +12,24 @@ import customtkinter as ctk
 import theme as t
 
 POS_COLS = (
-    ("par", "Par", 124, "w"),
-    ("lado", "Lado", 95, "w"),
-    ("pos", "Posición", 102, "e"),
-    ("entrada", "Entrada", 97, "e"),
-    ("mark", "Mark", 97, "e"),
-    ("liq", "Liquidación", 104, "e"),
-    ("ratio", "Margen %", 86, "e"),
-    ("margen", "Margen", 152, "e"),
-    ("pnl", "PnL", 106, "e"),
-    ("fee", "Fee", 82, "e"),
-    ("tpsl", "TP / SL", 190, "e"),
+    ("par", "Par", 132, "w"),
+    ("lado", "Lado", 74, "w"),
+    ("apertura", "Apertura", 92, "w"),
+    ("pos", "Posición", 100, "e"),
+    ("entrada", "Entrada", 94, "e"),
+    ("mark", "Mark", 94, "e"),
+    ("liq", "Liquidación", 100, "e"),
+    ("ratio", "Margin ratio", 98, "e"),
+    ("margen", "Margen (USDT)", 132, "e"),
+    ("pnl", "PnL (USDT)", 122, "e"),
+    ("fee", "Fee · %mrg / pos", 140, "e"),
+    ("tpsl", "TP / SL", 196, "e"),
 )
+
+# columnas con lapiz: la cabecera reserva el mismo hueco para que el texto
+# quede sobre el borde derecho del valor, no sobre el del lapiz.
+PENCIL_GUTTER = 24
+PENCIL_COLS = {"margen", "tpsl"}
 
 HIST_COLS = (
     ("fecha", "Fecha", 142, "w"),
@@ -39,7 +45,7 @@ HIST_COLS = (
 SIDES = {1: "LONG", 2: "CLOSE S", 3: "SHORT", 4: "CLOSE L"}
 STATES = {1: "Pendiente", 2: "Sin llenar", 3: "Ejecutada", 4: "Cancelada", 5: "Invalida"}
 
-ROW_H = 46
+ROW_H = 56
 ACTION_W = 200
 
 
@@ -57,6 +63,14 @@ def _fee_color(value):
     if value < 0:
         return t.GREEN
     return t.MUTED
+
+
+def _fmt_when(ts):
+    """Apertura / fecha de orden: ms de la API -> '30/10 04:31'."""
+    try:
+        return datetime.fromtimestamp(float(ts) / 1000).strftime("%d/%m %H:%M")
+    except Exception:
+        return "—"
 
 
 class Pencil(tk.Canvas):
@@ -110,11 +124,12 @@ class _Header(ctk.CTkFrame):
                 fg_color=t.GREEN, hover_color=t.GREEN, border_color=t.BORDER)
             self.checkbox.grid(row=0, column=0, padx=(6, 0), pady=8)
             col = 1
-        for i, (_, label, width, anchor) in enumerate(cols):
+        for i, (key, label, width, anchor) in enumerate(cols):
+            gutter = PENCIL_GUTTER if key in PENCIL_COLS else 0
             self.grid_columnconfigure(col + i, minsize=width + 8, weight=0)
             ctk.CTkLabel(self, text=label, font=(t.UI, 11, "bold"), text_color=t.MUTED,
-                         anchor=anchor, width=width).grid(
-                row=0, column=col + i, sticky="ew", padx=(6, 2), pady=5)
+                         anchor=anchor, width=width - gutter).grid(
+                row=0, column=col + i, sticky="ew", padx=(6, 2 + gutter), pady=6)
         if extra_right:
             self.grid_columnconfigure(col + len(cols), minsize=0, weight=1)
             self.grid_columnconfigure(col + len(cols) + 1, minsize=extra_right, weight=0)
@@ -189,6 +204,8 @@ class PositionsTable(ctk.CTkFrame):
         frame = ctk.CTkFrame(self.body, fg_color=bg, corner_radius=0, height=ROW_H)
         frame.grid(row=index, column=0, sticky="ew")
         frame.grid_propagate(False)
+        # fila entera de alto: asi todo queda centrado y nada toca el borde
+        frame.grid_rowconfigure(0, weight=1)
 
         var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(frame, text="", width=22, checkbox_width=16, checkbox_height=16,
@@ -210,36 +227,59 @@ class PositionsTable(ctk.CTkFrame):
                                      text_color=t.TEXT, anchor="e")
                 value.grid(row=0, column=0, sticky="e")
                 Pencil(cell, lambda pos=p: self.on_margin(pos), bg=bg,
-                       enabled=int(p.get("openType") or 1) == 1).grid(row=0, column=1, padx=(6, 0))
+                       enabled=int(p.get("openType") or 1) == 1).grid(
+                    row=0, column=1, padx=(4, 0), sticky="e")
                 cells["mar_val"] = value
 
             elif key == "tpsl":
+                # todo alineado a la derecha: con TP, SL o ambos el borde derecho
+                # del dato coincide con el de la cabecera
                 cell = ctk.CTkFrame(frame, fg_color="transparent")
                 cell.grid(row=0, column=col, sticky="ew", padx=(6, 2))
-                tp = ctk.CTkLabel(cell, text="", font=(t.NUM, 13, "bold"),
+                cell.grid_columnconfigure(0, weight=1)
+                box = ctk.CTkFrame(cell, fg_color="transparent")
+                box.grid(row=0, column=0, sticky="e")
+                Pencil(cell, lambda pos=p: self.on_tpsl(pos), bg=bg).grid(
+                    row=0, column=1, sticky="e", padx=(4, 0))
+                tp = ctk.CTkLabel(box, text="", font=(t.NUM, 13, "bold"),
                                   text_color=t.GREEN, anchor="e")
-                sep = ctk.CTkLabel(cell, text="", font=(t.NUM, 13),
-                                   text_color=t.MUTED, anchor="center", width=18)
-                sl = ctk.CTkLabel(cell, text="", font=(t.NUM, 13, "bold"),
-                                  text_color=t.RED, anchor="w")
-                tp.pack(side="left", expand=True, fill="x")
-                sep.pack(side="left")
-                sl.pack(side="left", expand=True, fill="x")
-                Pencil(cell, lambda pos=p: self.on_tpsl(pos), bg=bg).pack(
-                    side="right", padx=(6, 0))
+                sep = ctk.CTkLabel(box, text="", font=(t.NUM, 13),
+                                   text_color=t.MUTED, anchor="e", width=16)
+                sl = ctk.CTkLabel(box, text="", font=(t.NUM, 13, "bold"),
+                                  text_color=t.RED, anchor="e")
+                sl.pack(side="right")
+                sep.pack(side="right")
+                tp.pack(side="right")
                 cells["tp"], cells["sep"], cells["sl"] = tp, sep, sl
 
             elif key == "pnl":
+                # como en MEXC: importe con su moneda y el ROE debajo
                 cell = ctk.CTkFrame(frame, fg_color="transparent")
                 cell.grid(row=0, column=col, sticky="ew", padx=(6, 2))
                 cell.grid_columnconfigure(0, weight=1)
                 value = ctk.CTkLabel(cell, text="", font=(t.NUM, 13, "bold"),
-                                     text_color=t.TEXT, anchor="e")
+                                     text_color=t.TEXT, anchor="e", height=19)
                 value.grid(row=0, column=0, sticky="e")
                 pct = ctk.CTkLabel(cell, text="", font=(t.NUM, 11),
-                                   text_color=t.MUTED, anchor="e")
+                                   text_color=t.MUTED, anchor="e", height=15)
                 pct.grid(row=1, column=0, sticky="e")
                 cells["pnl"], cells["pnl_pct"] = value, pct
+
+            elif key == "fee":
+                # fee, que parte del margen y del nocional es, y el ahorro si viene
+                cell = ctk.CTkFrame(frame, fg_color="transparent")
+                cell.grid(row=0, column=col, sticky="ew", padx=(6, 2))
+                cell.grid_columnconfigure(0, weight=1)
+                value = ctk.CTkLabel(cell, text="", font=(t.NUM, 13, "bold"),
+                                     text_color=t.TEXT, anchor="e", height=19)
+                value.grid(row=0, column=0, sticky="e")
+                share = ctk.CTkLabel(cell, text="", font=(t.NUM, 11),
+                                     text_color=t.MUTED, anchor="e", height=15)
+                share.grid(row=1, column=0, sticky="e")
+                saved = ctk.CTkLabel(cell, text="", font=(t.NUM, 11),
+                                     text_color=t.GREEN, anchor="e", height=13)
+                saved.grid(row=2, column=0, sticky="e")
+                cells["fee"], cells["fee_share"], cells["fee_saved"] = value, share, saved
 
             else:
                 bold = "bold" if key in ("mark", "pos", "par", "lado") else None
@@ -284,13 +324,15 @@ class PositionsTable(ctk.CTkFrame):
         if qty and size:
             mark = entry + (pnl / (qty * size)) * (1 if long_ else -1)
 
+        notional = (qty * size * mark) if (mark and size) else 0.0
+
         labels = row["labels"]
-        labels["par"].configure(text=p.get("symbol", ""))
+        labels["par"].configure(text=p.get("_name") or p.get("symbol", ""))
         labels["lado"].configure(
             text=f"{p.get('leverage', '')}X {'LONG' if long_ else 'SHORT'}",
             text_color=t.GREEN if long_ else t.RED)
 
-        labels["pos"].configure(text=t.fmt_usdt(qty * size * mark) if (mark and size) else "—")
+        labels["pos"].configure(text=t.fmt_usdt(notional) if notional else "—")
         labels["entrada"].configure(text=t.fmt_price(entry))
         labels["mark"].configure(text=t.fmt_price(mark) if mark else "—",
                                  text_color=t.MUTED)
@@ -302,22 +344,33 @@ class PositionsTable(ctk.CTkFrame):
         labels["ratio"].configure(text=f"{ratio:.2f}%" if ratio else "—",
                                   text_color=t.GOLD if ratio >= 20 else t.TEXT)
 
-        labels["mar_val"].configure(text=f"{t.fmt_usdt(p.get('im'))} USDT")
+        labels["apertura"].configure(text=_fmt_when(p.get("createTime")),
+                                      text_color=t.MUTED)
+        labels["mar_val"].configure(text=t.fmt_usdt(p.get("im")))
 
         margin = float(p.get("im") or 0)
         roe = (pnl / margin * 100) if margin else 0.0
-        labels["pnl"].configure(text=t.fmt_pnl(pnl), text_color=_pnl_color(pnl))
+        labels["pnl"].configure(text=f"{t.fmt_pnl(pnl)} USDT", text_color=_pnl_color(pnl))
         labels["pnl_pct"].configure(text=f"{roe:+.2f}%", text_color=_pnl_color(pnl))
-        labels["fee"].configure(text=t.fmt_fee(fee), text_color=_fee_color(fee))
+
+        # que parte del margen y del nocional se lleva la comision
+        labels["fee"].configure(text=f"{t.fmt_fee(fee)} USDT", text_color=_fee_color(fee))
+        labels["fee_share"].configure(
+            text=f"{t.fmt_share(fee / margin * 100 if margin else 0)} / "
+                 f"{t.fmt_share(fee / notional * 100 if notional else 0)}")
+        # lowSaveTotalFee viene de MEXC y es exactamente su "Fees saved"
+        saved = float(p.get("lowSaveTotalFee") or 0)
+        labels["fee_saved"].configure(
+            text=f"ahorro {t.fmt_fee(saved)}" if saved > 0 else "")
 
         tp = float(p.get("_tp") or 0)
         sl = float(p.get("_sl") or 0)
         if tp and sl:
-            labels["tp"].configure(text=t.fmt_price(tp))
+            labels["tp"].configure(text=t.fmt_price(tp), text_color=t.GREEN)
             labels["sep"].configure(text="/")
             labels["sl"].configure(text=t.fmt_price(sl))
         elif tp:
-            labels["tp"].configure(text=f"TP {t.fmt_price(tp)}")
+            labels["tp"].configure(text=f"TP {t.fmt_price(tp)}", text_color=t.GREEN)
             labels["sep"].configure(text="")
             labels["sl"].configure(text="")
         elif sl:
@@ -328,10 +381,6 @@ class PositionsTable(ctk.CTkFrame):
             labels["tp"].configure(text="—", text_color=t.MUTED)
             labels["sep"].configure(text="")
             labels["sl"].configure(text="")
-        if tp:
-            labels["tp"].configure(text_color=t.GREEN)
-        if sl:
-            labels["sl"].configure(text_color=t.RED)
 
         row["data"] = p
 
@@ -404,14 +453,8 @@ class HistoryTable(ctk.CTkFrame):
         pnl = float(o.get("profit") or 0)
         fee = float(o.get("totalFee") or 0)
         state = int(o.get("state") or 0)
-        ts = o.get("createTime") or 0
-        try:
-            when = datetime.fromtimestamp(ts / 1000).strftime("%d/%m %H:%M:%S")
-        except Exception:
-            when = "—"
-
         values = {
-            "fecha": (when, t.MUTED),
+            "fecha": (_fmt_when(o.get("createTime")), t.MUTED),
             "par": (o.get("symbol", ""), t.TEXT),
             "tipo": (SIDES.get(int(o.get("side") or 0), "?"), t.MUTED),
             "qty": (t.fmt_qty(o.get("vol")), t.TEXT),

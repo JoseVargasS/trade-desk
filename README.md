@@ -25,14 +25,17 @@ La app muestra tu IP arriba a la derecha, con botón para copiarla.
 ## Uso
 
 - **Tarjetas en fila.** Cada tarjeta es un par con su propio apalancamiento, margen,
-  tamaño, TP/SL. La primera aparece al abrir; **`+ Añadir par`** agrega otra a la derecha.
-  Clic en el nombre del par de una tarjeta lo cambia.
+  tamaño, TP/SL. La app arranca **sin tarjetas**: **`+ Añadir par`** agrega la primera a la
+  izquierda y las siguientes a su derecha. Clic en el nombre del par de una tarjeta lo cambia.
+  El nombre se muestra como en MEXC (`GOLD(XAU)USDT`, no `XAU_USDT`).
 - **Apalancamiento**: escribes el valor o usas los presets `1 / 5 / 10 / 15 / 20 / 50`.
 - **Margen**: `Aislado` por defecto, `Cruzado` si lo cambias.
 - **Tamaño** + toggle `Margen` / `Nocional`:
   - `Margen` 100 a 10x → 1,000 USDT nocionales
   - `Nocional` 1,000 → 1,000 USDT nocionales
-- **TP / SL**: opcionales. Vacíos = entra sin ellos.
+- **TP / SL**: opcionales. Vacíos = entra sin ellos. Ojo: MEXC mide la dirección contra el
+  **precio actual**, no contra la entrada. Un SL puesto del lado de la ganancia (por encima
+  del precio en un LONG) no es un stop loss para MEXC: la app lo guarda como **TP** y te avisa.
 - **Resumen** en cada tarjeta: contratos, nocional real, fee estimada y liquidación
   estimada (long / short, solo en margen aislado).
 - **DRY-RUN** viene **activado**: no abre ni cierra posiciones. El **TP/SL** y el
@@ -52,8 +55,10 @@ La app muestra tu IP arriba a la derecha, con botón para copiarla.
 | Reverse | marca una sola → **Reverse** (endpoint nativo de MEXC) |
 | Cerrar todo | botón **CERRAR TODO** con confirmación |
 
-El checkbox del encabezado marca/desmarca todas. La tabla se refresca cada 2.5 s y
-mantiene tu selección. PnL y fee van con color: verde ganancia, rojo pérdida/costo.
+El checkbox del encabezado marca/desmarca todas. La tabla se refresca cada 3 s y
+mantiene tu selección. PnL y fee van con color (verde ganancia, rojo pérdida/costo), con su
+importe en USDT, el % que representan del margen y del nocional, y el **ahorro de fees**
+cuando MEXC lo reporta (`lowSaveTotalFee`).
 
 **Pestaña Historial**
 

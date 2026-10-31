@@ -19,7 +19,7 @@ import dialog
 import theme as t
 from actions import ActionsMixin
 from cards import TradeCard
-from mexc import Mexc
+from mexc import Mexc, display_name
 from search import SearchPopup
 from table import HistoryTable, PositionsTable
 
@@ -87,8 +87,10 @@ class App(ActionsMixin):
     # ---------------------------------------------------------------------- ui
     def _build_ui(self):
         self.root.title("Trade Desk")
-        self.root.geometry("1680x960")
-        self.root.minsize(1240, 800)
+        # 12 columnas en la tabla de posiciones + acciones: la fila mide 1700 px,
+        # asi que por debajo de 1760 se recorta en silencio (no hay scroll horizontal).
+        self.root.geometry("1800x1000")
+        self.root.minsize(1760, 860)
         self.root.configure(fg_color=t.BG)
         try:
             self.root.iconbitmap(os.path.join(BASE_DIR, "icon.ico"))
@@ -207,11 +209,17 @@ class App(ActionsMixin):
             pass
 
     # ------------------------------------------------------------------ tarjetas
+    def _name_for(self, symbol):
+        """Nombre del par como en MEXC. Sin red: catalogo o cache de contratos."""
+        contract = self._markets.get(symbol) or self.mx.cached_contract(symbol)
+        return display_name(contract) if contract else symbol
+
     def _add_card(self, symbol, cfg=None):
         cfg = cfg or {}
         card = TradeCard(self.deck, symbol, cfg, on_remove=self._remove_card,
                          on_symbol=self._pick_symbol, on_trade=self._trade,
                          on_change=self._schedule_calc)
+        card.set_name(self._name_for(symbol))
         card.pack(side="left", padx=(0, 10), pady=2, anchor="n")
         self.cards.append(card)
         self._schedule_calc(card)
@@ -264,6 +272,7 @@ class App(ActionsMixin):
 
     def _set_card_symbol(self, card, symbol):
         card.set_symbol(symbol)
+        card.set_name(self._name_for(symbol))
         self._save_config()
 
     # -------------------------------------------------------------------- datos
@@ -342,12 +351,15 @@ class App(ActionsMixin):
             self.q.put(("status", f"historial: {e}"))
 
     def _decorate(self, positions):
-        """Agrega contractSize y el TP/SL vigente a cada posicion."""
+        """Agrega contractSize, el nombre de MEXC y el TP/SL vigente."""
         for p in positions:
             try:
-                p["_contractSize"] = self.mx.contract(p["symbol"])["contractSize"]
+                contract = self.mx.contract(p["symbol"])
+                p["_contractSize"] = contract["contractSize"]
+                p["_name"] = display_name(contract)
             except Exception:
                 p["_contractSize"] = 0
+                p["_name"] = p.get("symbol", "")
         stops = {}
         if positions:
             try:
@@ -432,6 +444,8 @@ class App(ActionsMixin):
                     self.lbl_ip.configure(text=f"IP {payload}")
                 elif kind == "markets":
                     self._markets = payload
+                    for card in self.cards:
+                        card.set_name(self._name_for(card.symbol))
                 elif kind == "open_search":
                     SearchPopup(self.root, self._markets, payload)
                 elif kind == "preview":
@@ -443,6 +457,9 @@ class App(ActionsMixin):
                     self._on_order_done(*payload)
                 elif kind == "closed":
                     self._status(payload)
+                elif kind == "notice":
+                    title, text, danger = payload
+                    dialog.show(self.root, title, text, danger=danger)
         except queue.Empty:
             pass
         spent = time.perf_counter() - started

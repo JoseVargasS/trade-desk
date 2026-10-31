@@ -96,6 +96,14 @@ def fmt_fee(value):
     return f"{float(value or 0):.4f}"
 
 
+def fmt_share(value):
+    """Parte de un total, sin signo y a 2 decimales: 0.20%."""
+    v = abs(float(value or 0))
+    if 0 < v < 0.01:
+        return "<0.01%"
+    return f"{v:.2f}%"
+
+
 def fmt_qty(value):
     v = float(value or 0)
     if v == int(v):

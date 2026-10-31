@@ -6,7 +6,7 @@ import io
 import re
 
 import theme as t
-from mexc import Mexc
+from mexc import Mexc, MexcError, display_name, plan_tp_sl
 from search import filter_markets
 
 # un worker corre en un hilo: si toca un widget, Tk se bloquea varios segundos
@@ -38,9 +38,39 @@ def main():
     assert t.fmt_usdt(502.81124404) == "502.81"
     assert t.fmt_qty(127.0) == "127"
     assert t.fmt_pct(-3.92) == "-3.92%"
+    assert t.fmt_share(0.2) == "0.20%"
+    assert t.fmt_share(0.002) == "<0.01%"
+    assert t.fmt_share(0) == "0.00%"
     assert t.fmt_price(78632.6) == "78,632.6"
     assert t.fmt_price(0.07745) == "0.07745"
     print("formatos ok")
+
+    # ------------------------------------------------- nombre del par y TP/SL
+    assert display_name({"baseCoinName": "GOLD(XAU)", "quoteCoinName": "USDT"}) \
+        == "GOLD(XAU)USDT"
+    assert display_name({"symbol": "BTC_USDT",
+                         "displayNameEn": "BTC_USDT PERPETUAL"}) == "BTCUSDT"
+    assert display_name({}) == ""
+
+    # LONG: TP arriba, SL abajo. Contra el precio actual, no contra la entrada.
+    assert plan_tp_sl(True, 100, 110, 90) == (110.0, 90.0, [])
+    # un SL del lado de la ganancia no existe para MEXC: es un TP
+    tp, sl, avisos = plan_tp_sl(True, 100, None, 105)
+    assert (tp, sl) == (105.0, None) and avisos, (tp, sl, avisos)
+    # con el TP ya ocupado no se puede representar
+    for args in ((True, 100, 110, 105), (True, 100, 95, 90), (True, 100, 100, None),
+                 (False, 100, 110, None), (False, 100, 95, 98)):
+        try:
+            plan_tp_sl(*args)
+        except MexcError:
+            pass
+        else:
+            raise AssertionError(f"deberia rechazar {args}")
+    # SHORT: espejo exacto
+    assert plan_tp_sl(False, 100, 90, 110) == (90.0, 110.0, [])
+    tp, sl, avisos = plan_tp_sl(False, 100, None, 95)
+    assert (tp, sl) == (95.0, None) and avisos
+    print("nombre de par y tp/sl ok")
 
     # ---------------------------------------------------------- busqueda
     markets = {

@@ -4,6 +4,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 import theme as t
+from mexc import display_name
 
 FAVORITOS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT"]
 
@@ -13,7 +14,8 @@ def _is_usdt(contract):
 
 
 def contract_line(c):
-    return (f"{c['symbol']}    {c.get('maxLeverage', '')}x    "
+    # mismo nombre que muestra MEXC, no el simbolo crudo de la API
+    return (f"{display_name(c)}    {c.get('maxLeverage', '')}x    "
             f"1 = {t.fmt_qty(c.get('contractSize'))} {c.get('baseCoin', '')}")
 
 
@@ -34,7 +36,8 @@ def filter_markets(markets, text, limit=60):
         base = (c.get("baseCoin") or "").upper()
         if symbol.startswith(query) or base == query:
             starts.append(c)
-        elif query in symbol:
+        elif query in symbol or query in display_name(c).upper():
+            # se busca tambien por el nombre de MEXC: "gold" encuentra GOLD(XAU)USDT
             contains.append(c)
 
     # orden estable: los pares USDT primero dentro de cada grupo

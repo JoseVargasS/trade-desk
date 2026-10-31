@@ -29,7 +29,74 @@ ERRORES = {
     1004: "Cantidad invalida.",
     2001: "Direccion de orden invalida.",
     2015: "Precision de precio o cantidad invalida para este contrato.",
+    5002: "La orden TP/SL ya no existe: puede haberse ejecutado o estar cancelandose.",
+    5003: ("Precio de TP/SL invalido: MEXC exige que el TP este del lado de la ganancia "
+           "y el SL del lado de la perdida, tomando como referencia el precio actual."),
+    5004: ("La cantidad de la orden mas el TP/SL vigente supera lo cerrable. "
+           "La orden anterior se cancela de forma asincrona: reintenta en un segundo."),
 }
+
+
+def display_name(contract):
+    """Nombre como lo muestra MEXC: XAU_USDT -> GOLD(XAU)USDT."""
+    contract = contract or {}
+    base = contract.get("baseCoinName") or contract.get("baseCoin") or ""
+    quote = contract.get("quoteCoinName") or contract.get("quoteCoin") or ""
+    if base and quote:
+        return f"{base}{quote}"
+    english = (contract.get("displayNameEn") or "").upper()
+    for tail in (" PERPETUAL", "_PERPETUAL", "永续"):
+        english = english.replace(tail, "")
+    return english.replace("_", "") or contract.get("symbol", "")
+
+
+def plan_tp_sl(long_, price, tp, sl):
+    """Ordena el TP/SL segun la unica regla que aplica MEXC, medida contra el
+    precio actual (no contra la entrada):
+
+        LONG   -> TP debe quedar por encima, SL por debajo.
+        SHORT  -> TP debe quedar por debajo, SL por encima.
+
+    Un SL del lado de la ganancia se rechaza con 5003, pero ese mismo nivel si
+    entra como take profit. Cuando el TP esta vacio se mueve ahi y se avisa;
+    si el TP ya ocupa el lado de la ganancia no hay forma de representarlo.
+
+    Devuelve (tp, sl, avisos) y lanza MexcError con el motivo en castellano.
+    """
+    price = float(price)
+    tp = float(tp) if tp else None
+    sl = float(sl) if sl else None
+    lado_ganancia = "por encima" if long_ else "por debajo"
+    lado_perdida = "por debajo" if long_ else "por encima"
+    avisos = []
+
+    def en_ganancia(valor):
+        return valor > price if long_ else valor < price
+
+    if tp is not None and not en_ganancia(tp):
+        raise MexcError(
+            f"El take profit ({fmt_plain(tp)}) tiene que estar {lado_ganancia} del "
+            f"precio actual ({fmt_plain(price)}): si ya esta alcanzado, MEXC lo rechaza.")
+
+    if sl is not None and en_ganancia(sl):
+        if tp is None:
+            avisos.append(
+                f"El SL {fmt_plain(sl)} estaba del lado de la ganancia: MEXC solo acepta "
+                f"ese nivel como take profit, asi que se guardo como TP "
+                f"(cierra en {fmt_plain(sl)}). La posicion queda SIN stop loss.")
+            tp, sl = sl, None
+        else:
+            raise MexcError(
+                f"El TP ({fmt_plain(tp)}) y el SL ({fmt_plain(sl)}) quedan los dos del "
+                f"lado de la ganancia del precio actual ({fmt_plain(price)}). MEXC solo "
+                f"admite un nivel ahi: deja el SL {lado_perdida} de {fmt_plain(price)}.")
+
+    return tp, sl, avisos
+
+
+def fmt_plain(value):
+    """Precio para mensajes de error; los widgets usan theme.fmt_price."""
+    return f"{float(value):,.2f}"
 
 
 class MexcError(Exception):
@@ -102,6 +169,10 @@ class Mexc:
             data = self.http.get("/api/v1/contract/detail", params={"symbol": symbol}).json()["data"]
             self._contracts[symbol] = data
         return self._contracts[symbol]
+
+    def cached_contract(self, symbol):
+        """Contrato ya pedido (sin red). Sirve para pintar el nombre del par."""
+        return self._contracts.get(symbol)
 
     def markets(self, force=False):
         """Todos los contratos operables por API, indexados por simbolo.

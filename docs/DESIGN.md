@@ -81,7 +81,11 @@ Semánticos:
 - Radios: `R_CHIP = 6`, `R_CTRL = 8`, `R_CARD = 12`.
 - Padding interno de tarjeta: 12 px. Padding de ventana: 16 px.
 - Tarjeta de operación: **286 px de ancho, 486 px de alto** (fija).
-- Filas de tabla: 46 px (posiciones, PnL en dos líneas) y 38 px (historial). Cabecera: 36 px.
+- Filas de tabla: **56 px** (posiciones: PnL en dos líneas y fee en tres, centrados
+  verticalmente sin tocar los bordes) y 38 px (historial). Cabecera: 36 px.
+- Ventana: **1800 × 1000** por defecto, mínimo **1760 × 860**. La fila de posiciones mide
+  1700 px; con menos de 1760 la tabla recorta la última columna en silencio (no hay scroll
+  horizontal).
 ---
 
 ## 5. Componentes
@@ -100,28 +104,42 @@ Semánticos:
 
 | Celda | Contenido |
 |---|---|
-| `Par` | símbolo, mono 13 bold |
+| `Par` | nombre de MEXC (`GOLD(XAU)USDT`, de `baseCoinName + quoteCoin`), 13 bold |
 | `Lado` | `10X LONG` verde / `5X SHORT` rojo (apalancamiento incluido) |
+| `Apertura` | `dd/mm hh:mm` en `MUTED`, de `createTime` de `open_positions` |
 | `Posición` | nocional en USDT (`qty × contractSize × mark`), bold |
 | `Entrada`, `Mark` | precio; Mark verde/rojo contra la entrada |
 | `Liquidación` | precio en `GOLD` |
-| `Margen %` | `1.42%`; `GOLD` desde 20 % |
-| `Margen` | `502.11 USDT` bold + lápiz |
-| `PnL`, `Fee` | 4 decimales, color por signo |
-| `TP / SL` | TP `GREEN` · `/` muted · SL `RED` + lápiz |
+| `Margin ratio` | `0.50%`; `GOLD` desde 20 %. La cabecera dice **Margin ratio**, no `Margen %` |
+| `Margen (USDT)` | `502.11` bold + lápiz; la unidad vive en la cabecera |
+| `PnL (USDT)` | dos líneas: `-6.0976 USDT` en 13 bold y `ROE` (`-1.22%`) en `MUTED` 11 |
+| `Fee · %mrg / pos` | `0.9993 USDT` en 13 bold (color por signo), `0.20% / 0.02%` en `MUTED` 11 (parte del margen y del nocional) y `ahorro 1.7489` en `GREEN` 11 solo si `lowSaveTotalFee` > 0 |
+| `TP / SL` | todo alineado a la derecha: `3,990.5 / 3,880.2`, o `TP 3,990.5`, o `SL 3,880.2`, o `—`; lápiz al final |
 
-Todas las filas son de **una línea** (40 px). El modo de margen (aislado/cruzado) no se
-muestra en la fila: se deduce del lápiz de margen, que aparece deshabilitado en cruzado.
+La fila mide 56 px y lleva `grid_rowconfigure(0, weight=1)` para que cada celda quede
+centrada verticalmente sin tocar los bordes: los labels llevan `height` explícito (19 / 15 /
+13) porque el alto por defecto de 28 px desborda la fila. El modo de margen (aislado/cruzado)
+no se muestra en la fila: se deduce del lápiz de margen, que aparece deshabilitado en cruzado.
 
 **Reglas de la tabla**
 - No usar `ttk.Treeview`: no permite color por celda y el PnL debe ir verde/rojo.
 - Cada fila es un `CTkFrame` con `grid` y `minsize` por columna (mismo ancho en cabecera
   y filas) más `weight=1` para repartir el espacio sobrante.
+- **La cabecera hereda el `anchor` de su columna**: texto a la izquierda (`Par`, `Lado`,
+  `Apertura`), números a la derecha. No se centra: centrar deja el título flotando sobre
+  un dato pegado al borde y se lee peor.
+- **Columnas con lápiz (`margen`, `tpsl`)**: el lápiz ocupa 24 px al final de la celda, así
+  que la cabecera reserva ese mismo hueco (`PENCIL_GUTTER`) con `width = ancho - 24` y
+  `padx = (6, 26)`. Sin eso el título queda 24 px a la derecha del valor y la columna se ve
+  torcida. Vale para las dos: cabecera y fila suman siempre `ancho + 8`.
+- Anchos: `par 132 · lado 74 · apertura 92 · pos 100 · entrada 94 · mark 94 · liq 100 ·
+  ratio 98 · margen 132 · pnl 122 · fee 140 · tpsl 196`, con +8 px de padding por columna
+  (1700 px de fila con checkbox y acciones). `Lado` está en 74 porque `10X LONG` ocupa ~62 px;
+  `Par` en 132 para que entre `GOLD(XAU)USDT`.
 - Actualización en sitio; reconstrucción solo si cambia el conjunto de `positionId`.
 - Selección por **checkbox** por fila + checkbox maestro en la cabecera.
 - Columna de acciones (200 px): **Cerrar** en pastilla verde llena y **Reverse** con borde.
   Los lápices viven dentro de su celda (Margen y TP/SL).
-- Las cabeceras van **centradas** (`anchor="center"`), no siguen el alineado del dato.
 - El `Pencil` se dibuja con `create_polygon` + `create_line` sobre un `Canvas` de 20 px:
   cuerpo inclinado 135°, banda y punta. Sin glifo Unicode (evita tofu y look genérico).
   Hover de `MUTED` a `TEXT`; deshabilitado en `BORDER` y sin bind.
@@ -144,6 +162,8 @@ muestra en la fila: se deduce del lápiz de margen, que aparece deshabilitado en
 | `fmt_usdt` | `502.11` / `+502.11` | márgenes, nocional |
 | `fmt_qty` | `127` / `0.0134` | contratos y cantidades |
 | `fmt_pct` | `+1.24%` / `-3.92%` | variación 24h |
+| `fmt_share` | `0.20%` / `<0.01%` | parte de un total (fee sobre margen y nocional), sin signo |
+| `table._fmt_when` | `30/10 12:11` | `createTime` (ms) de posiciones e historial; fuera de `theme` porque es fecha, no número |
 
 Reglas de color en tablas:
 
@@ -168,8 +188,10 @@ Reglas de color en tablas:
 
 ## 8. Deuda visual conocida
 
-- Las filas-widget son más caras que un Treeview: con 30+ posiciones habría que pasar a
-  actualización incremental por columna o virtualizar.
+- Las filas-widget son más caras que un Treeview: medido, **~165 ms por fila** al
+  construir (10 posiciones = 1.6 s de bloqueo) y **~8.5 ms por fila** al refrescar en sitio.
+  Por eso solo se reconstruye cuando cambia el conjunto de `positionId`. Con 30+ posiciones
+  habría que actualizar por columna o virtualizar.
 - El scroll horizontal de tarjetas no responde a la rueda sin `Shift`.
 - El popup de búsqueda puede quedar 1-2 px desalineado con escalado DPI distinto.
 - El historial se re-renderiza completo cada 15 s; con más de ~100 filas conviene paginar.
