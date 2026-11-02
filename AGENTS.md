@@ -43,10 +43,13 @@ scripts\check.bat           # lint + formato + tests de una
 - Colores, fuentes y formatos numéricos **solo** en `theme.py`. Los widgets de las tablas son
   `tk.Label`/`tk.Frame` nativos (pintan ~3x más rápido que los CTk, que son Canvas aparte);
   usan `theme.num_font` / `theme.ui_font`, que dan el tamaño en **píxeles** ya escalado.
+- **Solo se corre el test que cubre lo que se tocó** (matriz en §9). Nunca la suite entera "por
+  si acaso": cuesta ~18 s y gasta cuota del usuario sin aportar nada si el cambio fue de un
+  texto o un decimal. Si no hay test para esa zona, alcanza con mirar el resultado (captura).
 - Después de tocar UI: `python tools/smoke_live.py 9` (arranca 9 s, pinta las posiciones reales y
   cierra sola; no envía órdenes) y, si se tocaron tablas, `python tools/medir_repintado.py`
   (mide lo que tarda la ventana en repintarse al restaurarla desde minimizada).
-- Antes de commitear: `scripts\check.bat` en verde.
+- Antes de commitear: `scripts\check.bat` en verde (una sola vez, no en cada paso).
 
 ---
 
@@ -432,6 +435,23 @@ python tools/smoke_live.py 9  # arranca 9 s, pinta posiciones y ordenes, cierra 
 python tools/medir_repintado.py  # ms que tarda en repintarse al restaurar
 # perf.log registra cualquier callback de la UI que tarde > 200 ms
 ```
+
+**Qué correr según lo que se tocó** (nada más que eso; la suite completa solo al commitear):
+
+| Se tocó | Correr |
+|---|---|
+| `theme.py` (formato, color, fuente) | `python -m pytest tests/test_theme.py` |
+| `table.py` (fila, celda, cabecera) | `python -m pytest tests/test_ui_smoke.py -k "fila or fee"` o una captura de la fila |
+| `mexc.py` (payload, `vol`, precio, fee) | `python -m pytest tests/test_mexc_orders.py tests/test_mexc_pure.py` |
+| `orders.py` (tabla/editor de órdenes) | `python -m pytest tests/test_ui_smoke.py -k orden` |
+| `cards.py`, `closebar.py` | `python -m pytest tests/test_ui_smoke.py -k "tarjeta or panel"` |
+| `dialog.py`, `search.py`, `ui.py` | `python -m pytest tests/test_ui_smoke.py tests/test_search.py -k "dialogo or buscador or teclado"` |
+| `app.py`, `actions.py` (hilos, cola, órdenes) | `python -m pytest tests/test_no_threaded_widgets.py tests/test_app_notices.py tests/test_actions_close.py` |
+| `tooltip.py` | nada propio: se mira con una captura del panel |
+| docs, comentarios, README | nada |
+
+Si el cambio es de texto, formato o color: **captura** y listo, sin tests. Si dudas de qué
+test cubre algo, preguntar antes de correr la suite entera.
 
 Antes de entregar un cambio:
 

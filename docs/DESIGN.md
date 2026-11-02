@@ -124,8 +124,8 @@ fuente se pide con `theme.num_font(size, bold)` / `theme.ui_font(...)`, que la d
 | `Lado` | `10X LONG` verde / `5X SHORT` rojo (apalancamiento incluido) |
 | `Apertura` | `dd/mm hh:mm` en `MUTED`, de `createTime` de `open_positions` |
 | `Posición` | nocional con su unidad: `4,990.76 USDT`, bold |
-| `Entrada`, `Mark price` | precio; Mark price verde/rojo contra la entrada |
-| `Liquidación` | precio en `GOLD` |
+| `Entrada`, `Mark price` | precio con los decimales del contrato (`fmt_price_exact`, mínimo 2): `3,900.75`; Mark price verde/rojo contra la entrada |
+| `Liquidación` | precio igual que Mark price, en `GOLD` |
 | `Margin ratio` | `0.50%`; `GOLD` desde 20 %. La cabecera dice **Margin ratio**, no `Margen %` |
 | `Margen` | `500.69 USDT` bold + lápiz; la unidad va en el valor, no en la cabecera |
 | `PnL` | dos líneas: `-6.0976 USDT` en 13 bold y `ROE` (`-1.22%`) en `MUTED` 11 |
@@ -185,8 +185,8 @@ no se muestra en la fila: se deduce del lápiz de margen, que aparece deshabilit
 
 | Función | Salida | Uso |
 |---|---|---|
-| `fmt_price` | `78,549.5` / `2,239.10` / `0.90560` | precios, mark price, liquidación |
-| `fmt_price_exact` | `2,246.39` | precio con los decimales del contrato (`priceScale`): en una orden límite lo que se ve es lo que se envía |
+| `fmt_price` | `78,549.5` / `2,239.10` / `0.90560` | resúmenes y precios de referencia; **no** en la fila |
+| `fmt_price_exact` | `3,900.75` | precios de la fila (Entrada, Mark price, Liquidación, mínimo 2 decimales) y precio de una orden límite: lo que se ve es lo que se envía |
 | `fmt_pnl` | `+12.4021` / `-3.1502` | PnL, signo siempre, 4 decimales |
 | `fmt_fee` | `0.1997` | comisiones, 4 decimales |
 | `fmt_usdt` | `502.11` / `+502.11` | márgenes, nocional |

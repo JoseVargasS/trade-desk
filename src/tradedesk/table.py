@@ -441,12 +441,15 @@ class PositionsTable(ctk.CTkFrame):
         )
 
         labels["pos"].configure(text=f"{t.fmt_usdt(notional)} USDT" if notional else "—")
-        labels["entrada"].configure(text=t.fmt_price(entry))
-        labels["mark"].configure(text=t.fmt_price(mark) if mark else "—", fg=t.MUTED)
+        # precios con los decimales del contrato (minimo 2): fmt_price recorta a 1
+        # decimal desde 1000 y en el mark/liq se perdia el centavo
+        escala = max(2, int(p.get("_priceScale") or 2))
+        labels["entrada"].configure(text=t.fmt_price_exact(entry, escala))
+        labels["mark"].configure(text=t.fmt_price_exact(mark, escala) if mark else "—", fg=t.MUTED)
         if mark:
             winning = mark > entry if long_ else mark < entry
             labels["mark"].configure(fg=t.GREEN if winning else t.RED)
-        labels["liq"].configure(text=t.fmt_price(liq) if liq > 0 else "—", fg=t.GOLD)
+        labels["liq"].configure(text=t.fmt_price_exact(liq, escala) if liq > 0 else "—", fg=t.GOLD)
         labels["ratio"].configure(
             text=f"{ratio:.2f}%" if ratio else "—", fg=t.GOLD if ratio >= 20 else t.TEXT
         )
