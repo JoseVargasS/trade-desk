@@ -38,6 +38,9 @@ class FakeMexc(Mexc):
         # hay endpoints con dict y otros con array (order/cancel): se copia igual
         copia = dict(payload) if isinstance(payload, dict) else list(payload)
         self.sent.append((path, copia))
+        if path.endswith("/stoporder/cancel"):
+            fuera = copia[0]["stopPlanOrderId"]
+            self.stops = [s for s in self.stops if s.get("id") != fuera]
         return {"orderId": "test"}
 
     def _get(self, path, params=None):

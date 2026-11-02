@@ -624,3 +624,84 @@ def test_los_popups_abren_y_escriben_en_la_fila(ventana, posicion):
     precio._apply()
     assert barra.limit_price == 2246.39
     assert barra.price_btn.cget("text") == "2,246.39"
+
+
+def _widgets(widget):
+    for hijo in widget.winfo_children():
+        yield hijo
+        yield from _widgets(hijo)
+
+
+@pytest.mark.ui
+def test_el_lapiz_usa_el_dato_vigente_y_no_la_foto_vieja(ventana, posicion):
+    """`render()` refresca la fila; el lápiz no puede quedarse con el dict viejo.
+
+    Con el dict viejo `_tpsl_id` era None y cada edición creaba otro SL en MEXC.
+    """
+    from tradedesk import table
+
+    visto = []
+    tabla = table.PositionsTable(
+        ventana,
+        on_close=lambda p, i: None,
+        on_tpsl=visto.append,
+        on_margin=lambda p: None,
+        on_reverse=lambda p: None,
+    )
+    tabla.pack(fill="both", expand=True)
+    tabla.render([posicion])
+    ventana.update()
+    tabla.render([dict(posicion, _tpsl_id=99, _sl=3800.0)])
+    ventana.update()
+
+    lapices = [w for w in _widgets(tabla.rows[1]["frame"]) if isinstance(w, table.Pencil)]
+    lapices[-1].command()  # el ultimo es el de TP/SL
+
+    assert visto and visto[-1]["_tpsl_id"] == 99
+    assert visto[-1]["_sl"] == 3800.0
+
+
+@pytest.mark.ui
+def test_el_formulario_pinta_el_resumen_y_bloquea_el_extra(ventana):
+    import customtkinter as ctk
+
+    from tradedesk import dialog
+
+    campos = [("sl", "Stop loss", "")]
+    resumen = lambda e: f"SL {e['sl'].get()} → 0 USDT"  # noqa: E731
+
+    bloqueado = dialog._FormDialog(
+        ventana,
+        "TP / SL",
+        campos,
+        extras=[("Break-even", lambda e: e["sl"].set("123.45"), False)],
+        resumen=resumen,
+    )
+    ventana.update()
+    assert bloqueado.lbl_resumen.cget("text") == "SL  → 0 USDT"
+    bloqueado.entries["sl"].set("100")
+    assert bloqueado.lbl_resumen.cget("text") == "SL 100 → 0 USDT", "se actualiza al escribir"
+    boton = next(
+        w
+        for w in _widgets(bloqueado)
+        if isinstance(w, ctk.CTkButton) and w.cget("text") == "Break-even"
+    )
+    assert str(boton.cget("state")) == "disabled"
+    bloqueado.destroy()
+
+    activo = dialog._FormDialog(
+        ventana,
+        "TP / SL",
+        campos,
+        extras=[("Break-even", lambda e: e["sl"].set("123.45"), True)],
+        resumen=resumen,
+    )
+    ventana.update()
+    boton = next(
+        w
+        for w in _widgets(activo)
+        if isinstance(w, ctk.CTkButton) and w.cget("text") == "Break-even"
+    )
+    boton._command()
+    assert activo.entries["sl"].get() == "123.45", "el extra escribe en el input"
+    activo.destroy()

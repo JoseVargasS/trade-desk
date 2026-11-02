@@ -140,6 +140,53 @@ def fee_desglose(position):
     }
 
 
+def mark_price(position):
+    """Precio de marca derivado del PnL: `open_positions` no lo manda."""
+    qty = float(position.get("holdVol") or 0)
+    size = float(position.get("_contractSize") or 0)
+    if not (qty and size):
+        return 0.0
+    entry = float(position.get("holdAvgPrice") or 0)
+    signo = 1 if int(position.get("positionType") or 1) == 1 else -1
+    return entry + (float(position.get("unRealizedPnl") or 0) / (qty * size)) * signo
+
+
+def pnl_en_precio(position, long_, precio):
+    """Lo que se gana (o pierde) si la posicion se cerrara en `precio`, sin fees."""
+    coins = float(position.get("holdVol") or 0) * float(position.get("_contractSize") or 0)
+    entry = float(position.get("holdAvgPrice") or 0)
+    return coins * (float(precio) - entry) * (1 if long_ else -1)
+
+
+def break_even_price(position, long_):
+    """SL que deja la operacion en cero (cubre entrada, salida y funding).
+
+    MEXC no informa lo que cobrara al cerrar: la comision se calcula al cerrar
+    con la tasa del contrato sobre el nocional de salida. Se usa la tasa
+    efectiva que ya se cobro al abrir (asi entran los descuentos), aplicada al
+    nocional del break-even: mismo tamaño y practicamente el mismo precio.
+
+    Devuelve (precio, cubre): el SL redondeado hacia afuera del precio (ceil en
+    long, floor en short, para que el tick nunca deje perdida) y lo que cubre en
+    USDT, que es el PnL bruto en ese precio.
+    """
+    entry = float(position.get("holdAvgPrice") or 0)
+    coins = float(position.get("holdVol") or 0) * float(position.get("_contractSize") or 0)
+    if not (entry and coins):
+        return None, 0.0
+    fee = fee_desglose(position)
+    coste = fee["comision"] + fee["funding"]
+    tasa = fee["comision"] / (coins * entry)
+    paso = 10 ** int(position.get("_priceScale") or 2)
+    if long_:
+        ideal = (entry + coste / coins) / (1 - tasa)
+        be = math.ceil(ideal * paso) / paso
+        return be, coins * (be - entry)
+    ideal = (entry - coste / coins) / (1 + tasa)
+    be = math.floor(ideal * paso) / paso
+    return be, coins * (entry - be)
+
+
 def decorate_positions(mx, positions):
     """Agrega a cada posicion lo que `open_positions` no devuelve: contrato,
     nombre de MEXC y el TP/SL vigente (que vive en otro endpoint)."""

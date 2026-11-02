@@ -90,6 +90,10 @@ Decisiones de fondo que **no** están en discusión:
    al 100 %**, con el mismo diálogo de siempre; un precio en el primer campo la vuelve orden
    **límite** (puede quedar sin llenar) y el `%` permite cerrar una parte. También:
    checkboxes + `Cerrar seleccionadas`, `Reverse` y `CERRAR TODO` (siempre a mercado).
+   El **lápiz de TP/SL** abre el editor con dos líneas vivas (`TP 101,200.0 → +15.2400 USDT`
+   y `SL 99,500.0 → -6.3500 USDT`) y un botón `Break-even` que rellena el SL con el precio
+   que deja la operación en cero (comisión de entrada + salida + funding). Se habilita solo
+   cuando el precio ya lo pasó; si no alcanza, el botón sale gris y la nota dice cuánto falta.
 8. Pestaña **Órdenes** (panel estilo MEXC): las límite que todavía no se llenaron, con par
    (+`Perpetual` y el % llenado debajo), fecha, dirección (`Compra LONG` / `Venta SHORT`),
    apalancamiento, monto, precio, llenado, margen usado, TP/SL en dos líneas, fee y estado.
@@ -412,6 +416,26 @@ en la cabecera con botón para copiarla.
     Ojo con los números de MEXC: su "Fees" del panel es `totalFee + lowSaveTotalFee` (por eso
     sale más alto) y `lowSaveTotalFee` es el "Fees saved", que **no** suma.
 
+22. **Editar el TP/SL creaba un SL nuevo en vez de reemplazarlo**: el lápiz de la fila se
+    construía con `lambda pos=p:` y se quedaba con el dict de cuando se creó la fila. Ese
+    dict tenía `_tpsl_id = None`, así que la segunda edición no cancelaba nada y
+    `stoporder/place` acumulaba stops. Ahora `table._add_row` pasa `vigente()`, que lee
+    `self.rows[pid]["data"]` al momento del clic (el mismo dict viejo afectaba a cerrar,
+    reverse y al lápiz de margen: `holdVol` desactualizado tras un cierre parcial). Además
+    `_tpsl_worker` cancela **todos** los stop de ese `positionId` (leídos de
+    `stoporder/list/orders`), no un id cacheado: limpia los duplicados que ya existan.
+    Tests: `test_ui_smoke.py::test_el_lapiz_usa_el_dato_vigente_y_no_la_foto_vieja` y
+    `test_actions_close.py::test_editar_el_tpsl_cancela_todos_los_stop_de_la_posicion`.
+
+23. **Break-even**: el botón del diálogo TP/SL rellena el SL con
+    `mexc.break_even_price()` = entrada ± (comisión de entrada + funding ya cobrado +
+    comisión de salida estimada) / contratos, redondeado **hacia afuera** del precio.
+    La salida no se puede saber de antemano (MEXC la cobra al cerrar con la tasa del
+    contrato), así que se usa la tasa efectiva del `totalFee` sobre el nocional del propio
+    break-even. Solo se habilita si el precio de marca ya lo pasó; si el precio se mueve
+    entre abrir el diálogo y guardar, `_tpsl_worker` rechaza en vez de que `plan_tp_sl`
+    guarde ese SL como TP.
+
 **Cómo diagnosticar un bloqueo de UI:** `perf.log` registra con hora cualquier callback
 de `_drain` que tarde más de 200 ms **y los mensajes que lo causaron**
 (`drain 1645 ms · history,positions`). Si el archivo tiene líneas, ahí está el culpable.
@@ -476,7 +500,27 @@ reenviar, todo probado contra la cuenta con órdenes de prueba a mitad de precio
 (la ruta existe y la firma está validada, pero no se ejecutó con posición abierta).
 El **cierre parcial** (`vol < holdVol`) y el **cierre límite** (`type=1`) están probados
 solo en el payload (`tests/test_mexc_orders.py`): falta ejecutarlos una vez contra una
-posición real.
+posición real. El **Break-even** también: la cuenta solo en `test_mexc_pure.py` (que el SL
+cubra comisiones y que nunca quede del lado de la pérdida por el redondeo) y en el
+diálogo; falta ponerlo una vez con una posición en ganancia y comprobar que el PnL queda
+en ~0 al ejecutarse.
+
+**Migración a Qt (en curso, F1a-F3 hechas):**
+
+- `python -m tradedesk.qt` abre una vista **de solo lectura** con las tarjetas, las posiciones
+  y las órdenes reales: mismos tokens, anchos de columna y altos de fila que la versión Tk
+  (importa `POS_COLS`/`ORDER_COLS` de `table.py`/`orders.py` para no duplicar medidas).
+- `session.py` es la capa sin UI: config, cola y pollers (tickers round-robin ~1.4 req/s,
+  posiciones y órdenes cada 3 s). Publica `cards`, `ticker`, `positions`, `orders` y `error`.
+  La vista Qt se alimenta de ahí; la app Tk todavía tiene su propio poller en `app.py`.
+- Las acciones (LONG/SHORT, cerrar, reverse, modificar/cancelar, lápices) **no están
+  conectadas**: avisan en la barra de estado. La app de Tkinter sigue siendo la que opera y
+  el acceso directo del escritorio abre esa (el cambio es en F6).
+- Medido con `tools/qt_probe.py` (8 tarjetas y 200 filas): **~50 ms** al restaurar contra
+  **943 ms** del caso equivalente en Tk.
+- Falta: F4 (diálogos, buscador, avisos), F5 (cablear acciones y tests) y F6 (el lanzador abre
+  Qt y se borra la vista Tk). Los tests siguen siendo de la app Tk: la vista Qt no tiene tests
+  todavía.
 
 **Pendiente / ideas descartadas por ahora:**
 

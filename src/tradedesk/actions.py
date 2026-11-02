@@ -8,8 +8,34 @@ import time
 
 from . import dialog
 from . import theme as t
-from .mexc import MexcError, close_vol, decorate_orders, plan_tp_sl
+from .mexc import (
+    MexcError,
+    break_even_price,
+    close_vol,
+    decorate_orders,
+    mark_price,
+    plan_tp_sl,
+    pnl_en_precio,
+)
 from .orders import edit_order, es_editable
+
+
+def _resumen_tpsl(pos, long_, campos):
+    """Lo que se gana o pierde si el TP/SL se ejecuta, en USDT."""
+    lineas = []
+    for clave, etiqueta in (("tp", "TP"), ("sl", "SL")):
+        texto = campos[clave].get().replace(",", "").strip()
+        if not texto:
+            continue
+        try:
+            precio = float(texto)
+        except ValueError:
+            continue
+        lineas.append(
+            f"{etiqueta} {t.fmt_price(precio)} → "
+            f"{t.fmt_pnl(pnl_en_precio(pos, long_, precio))} USDT"
+        )
+    return "\n".join(lineas) or "Escribe un precio para ver la ganancia o perdida."
 
 
 class ActionsMixin:
@@ -153,9 +179,27 @@ class ActionsMixin:
     # --------------------------------------------------------------- tp/sl
     def _edit_tpsl(self, pos):
         # el TP/SL es gestion de riesgo: se permite aunque DRY-RUN este activo
-        price = (self._prices or {}).get(pos.get("symbol")) or 0
+        precio = mark_price(pos) or (self._prices or {}).get(pos.get("symbol")) or 0
         long_ = int(pos.get("positionType") or 1) == 1
-        lado = ("SL debajo" if long_ else "SL arriba") if price else "SL en contra"
+        scale = int(pos.get("_priceScale") or 2)
+        lado = ("SL debajo" if long_ else "SL arriba") if precio else "SL en contra"
+
+        be, cubre = break_even_price(pos, long_)
+        cabe = bool(precio and be and (precio > be if long_ else precio < be))
+        texto_be = f"{be:.{scale}f}" if be else ""
+        if be:
+            linea_be = (
+                f"Break-even {t.fmt_price_exact(be, scale)} → {t.fmt_pnl(cubre)} USDT "
+                "(comision de entrada + salida + funding · neto 0)"
+            )
+            if not cabe:
+                linea_be += (
+                    f"\nNecesita precio {'>' if long_ else '<'} "
+                    f"{t.fmt_price_exact(be, scale)} (ahora {t.fmt_price(precio)})"
+                )
+        else:
+            linea_be = "Break-even no disponible: falta precio de entrada o tamaño"
+
         res = dialog.form(
             self.root,
             f"TP / SL · {pos.get('symbol')}",
@@ -165,36 +209,51 @@ class ActionsMixin:
             ],
             ok_text="Guardar",
             note=f"Qty {t.fmt_qty(pos.get('holdVol'))} contratos · "
-            f"precio actual {t.fmt_price(price) if price else '—'} ({lado})",
+            f"precio actual {t.fmt_price(precio) if precio else '—'} ({lado})\n{linea_be}",
+            extras=[("Break-even", lambda campos: campos["sl"].set(texto_be), cabe)],
+            resumen=lambda campos: _resumen_tpsl(pos, long_, campos),
         )
         if res is None:
             return
         try:
-            tp = float(res["tp"]) if res["tp"] else None
-            sl = float(res["sl"]) if res["sl"] else None
+            tp = float(res["tp"].replace(",", "")) if res["tp"] else None
+            sl = float(res["sl"].replace(",", "")) if res["sl"] else None
         except ValueError:
             dialog.show(self.root, "Numero invalido", "TP y SL deben ser numeros o quedar vacios.")
             return
-        threading.Thread(target=self._tpsl_worker, args=(pos, tp, sl), daemon=True).start()
+        # medio tick de margen: el campo pudo redondear el texto del break-even
+        es_be = bool(sl and be and abs(sl - be) < 0.5 * 10**-scale)
+        threading.Thread(target=self._tpsl_worker, args=(pos, tp, sl, es_be), daemon=True).start()
 
-    def _tpsl_worker(self, pos, tp, sl):
+    def _tpsl_worker(self, pos, tp, sl, es_be=False):
         symbol = pos.get("symbol")
         try:
             price = self.mx.price(symbol)
             long_ = int(pos.get("positionType") or 1) == 1
+            if es_be and sl and (sl > price if long_ else sl < price):
+                # sin esta guarda plan_tp_sl lo guardaria como TP
+                raise MexcError(
+                    "El precio se movio y el break-even ya no cubre las comisiones. Reintenta."
+                )
             # MEXC mide la direccion contra el precio actual, no contra la entrada
             tp, sl, avisos = plan_tp_sl(long_, price, tp, sl)
-            if pos.get("_tpsl_id"):
+            # se cancelan TODOS los stop de la posicion: un id viejo deja duplicados
+            ids = [
+                o.get("id")
+                for o in self.mx.tpsl_list()
+                if int(o.get("positionId") or 0) == int(pos["positionId"])
+            ]
+            for stop_id in [i for i in ids if i]:
                 try:
-                    self.mx.tpsl_cancel(pos["_tpsl_id"])
+                    self.mx.tpsl_cancel(stop_id)
                 except MexcError as e:
                     if "ya no existe" not in str(e):
                         raise
-                # el cancel es asincrono: recolocar de inmediato da 5004
-                if not self._wait_tpsl_clear(pos["positionId"]):
-                    raise MexcError(
-                        "MEXC todavia esta cancelando la orden anterior. Reintenta en un segundo."
-                    )
+            # el cancel es asincrono: recolocar de inmediato da 5004
+            if ids and not self._wait_tpsl_clear(pos["positionId"]):
+                raise MexcError(
+                    "MEXC todavia esta cancelando la orden anterior. Reintenta en un segundo."
+                )
             if tp or sl:
                 self.mx.tpsl_place(pos["positionId"], pos["holdVol"], tp, sl)
             self._log(f"OK  tpsl {symbol} tp={tp} sl={sl}")

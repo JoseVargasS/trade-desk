@@ -12,7 +12,7 @@ import customtkinter as ctk
 
 from . import theme as t
 from .closebar import CloseBar
-from .mexc import fee_desglose
+from .mexc import fee_desglose, mark_price
 from .tooltip import NumeroConDetalle
 
 POS_COLS = (
@@ -278,6 +278,16 @@ class PositionsTable(ctk.CTkFrame):
 
     def _add_row(self, p, index):
         bg = t.CARD if index % 2 == 0 else t.ROW_ALT
+        pid = p.get("positionId")
+
+        def vigente():
+            """Dato al momento del clic: render() cambia la fila, no los callbacks.
+
+            Con el dict capturado aqui el lapiz editaba el TP/SL de una foto vieja
+            (sin `_tpsl_id`) y MEXC creaba un stop nuevo en vez de reemplazarlo.
+            """
+            return self.rows[pid]["data"]
+
         # fila y celdas en tk: los CTkLabel/CTkFrame son Canvas aparte y el
         # repintado de la ventana completa se disparaba a ~180 ms
         frame = tk.Frame(self.body, bg=bg, height=t.px(ROW_H))
@@ -316,7 +326,7 @@ class PositionsTable(ctk.CTkFrame):
                 value.grid(row=0, column=0, sticky="e")
                 Pencil(
                     cell,
-                    lambda pos=p: self.on_margin(pos),
+                    lambda: self.on_margin(vigente()),
                     bg=bg,
                     enabled=int(p.get("openType") or 1) == 1,
                 ).grid(row=0, column=1, padx=(4, 0), sticky="e")
@@ -330,7 +340,7 @@ class PositionsTable(ctk.CTkFrame):
                 cell.grid_columnconfigure(0, weight=1)
                 box = tk.Frame(cell, bg=bg)
                 box.grid(row=0, column=0, sticky="e")
-                Pencil(cell, lambda pos=p: self.on_tpsl(pos), bg=bg).grid(
+                Pencil(cell, lambda: self.on_tpsl(vigente()), bg=bg).grid(
                     row=0, column=1, sticky="e", padx=(4, 0)
                 )
                 tp = tk.Label(
@@ -402,8 +412,8 @@ class PositionsTable(ctk.CTkFrame):
         frame.grid_columnconfigure(col, minsize=ACTION_W, weight=0)
         acts = CloseBar(
             frame,
-            on_close=lambda info, pos=p: self.on_close(pos, info),
-            on_reverse=lambda pos=p: self.on_reverse(pos),
+            on_close=lambda info: self.on_close(vigente(), info),
+            on_reverse=lambda: self.on_reverse(vigente()),
         )
         acts.grid(row=0, column=col, padx=(4, 6), sticky="e")
 
@@ -425,9 +435,7 @@ class PositionsTable(ctk.CTkFrame):
         ratio = float(p.get("marginRatio") or 0) * 100
 
         size = float(p.get("_contractSize") or 0)
-        mark = None
-        if qty and size:
-            mark = entry + (pnl / (qty * size)) * (1 if long_ else -1)
+        mark = mark_price(p) if (qty and size) else None
 
         notional = (qty * size * mark) if (mark and size) else 0.0
         # lo que MEXC llama "Fee": comision cobrada + funding (el ahorro no suma)

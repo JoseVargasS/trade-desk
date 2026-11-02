@@ -89,3 +89,38 @@ def test_cancelar_la_confirmacion_no_envia(app, posicion, monkeypatch):
     app._close_position(posicion)
 
     assert app.mx.sent == []
+
+
+def test_editar_el_tpsl_cancela_todos_los_stop_de_la_posicion(app, posicion):
+    """Se cancela por positionId, no por el `_tpsl_id` cacheado: si no, MEXC
+    acumula stops duplicados cada vez que se edita."""
+    app.mx._fake_price = 3900.0
+    app.mx.stops = [
+        {"id": 5, "positionId": 1},
+        {"id": 6, "positionId": 1},
+        {"id": 7, "positionId": 2},  # otra posicion: no se toca
+    ]
+
+    app._tpsl_worker(dict(posicion, _tpsl_id=None), None, 3800.0)
+    rutas = [ruta for ruta, _ in app.mx.sent]
+    cancelados = [p[0]["stopPlanOrderId"] for ruta, p in app.mx.sent if ruta.endswith("/cancel")]
+
+    assert sorted(cancelados) == [5, 6]
+    assert rutas[-1].endswith("/stoporder/place")
+    assert app.mx.sent[-1][1]["stopLossPrice"] == 3800.0
+
+
+def test_el_break_even_no_se_guarda_como_tp_si_el_precio_se_movio(app, posicion):
+    """Si el precio volvio a la entrada, el SL del break-even queda del lado de
+    la ganancia y `plan_tp_sl` lo convertiria en TP: mejor rechazar."""
+    app.mx._fake_price = 3000.0
+
+    app._tpsl_worker(posicion, None, 3100.0, True)
+    avisos = []
+    while not app.q.empty():
+        kind, payload = app.q.get()
+        if kind == "notice":
+            avisos.append(payload[1])
+
+    assert app.mx.sent == []
+    assert avisos and "break-even" in avisos[0].lower()

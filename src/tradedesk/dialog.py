@@ -292,10 +292,13 @@ def ask_key(parent, verify):
 class _FormDialog(Modal):
     """Formulario chico: N campos etiquetados, devuelve dict o None."""
 
-    def __init__(self, parent, title, fields, ok_text="Guardar", note=None):
+    def __init__(
+        self, parent, title, fields, ok_text="Guardar", note=None, extras=(), resumen=None
+    ):
         super().__init__(parent)
         self.result = None
         self.fields = fields
+        self._resumen = resumen
         self.overrideredirect(True)
         self.configure(fg_color=t.LINE)
         self.transient(parent)
@@ -348,8 +351,38 @@ class _FormDialog(Modal):
             entry.grid(row=i, column=1, sticky="ew", padx=(10, 0), pady=4)
             self.entries[key] = var
 
+        self.lbl_resumen = None
+        if resumen:
+            self.lbl_resumen = ctk.CTkLabel(
+                wrap,
+                text=resumen(self.entries),
+                font=(t.UI, 10),
+                text_color=t.MUTED,
+                anchor="w",
+                justify="left",
+            )
+            self.lbl_resumen.pack(anchor="w", padx=18, pady=(10, 0))
+            for var in self.entries.values():
+                var.trace_add("write", self._actualizar_resumen)
+
         buttons = ctk.CTkFrame(wrap, fg_color="transparent")
         buttons.pack(fill="x", padx=18, pady=(14, 16))
+        for texto, comando, activo in extras:
+            extra = ctk.CTkButton(
+                buttons,
+                text=texto,
+                width=110,
+                height=34,
+                corner_radius=t.R_CTRL,
+                fg_color=t.INPUT,
+                hover_color=t.BORDER,
+                text_color=t.TEXT,
+                font=(t.UI, 11),
+                command=lambda c=comando: c(self.entries),
+            )
+            extra.pack(side="left", padx=(0, 8))
+            if not activo:
+                extra.configure(state="disabled")
         ctk.CTkButton(
             buttons,
             text=ok_text,
@@ -383,12 +416,16 @@ class _FormDialog(Modal):
         self.geometry(f"+{max(0, x)}+{max(0, y)}")
         self.after(80, self.focus_force)
 
+    def _actualizar_resumen(self, *_):
+        if self.lbl_resumen is not None:
+            self.lbl_resumen.configure(text=self._resumen(self.entries))
+
     def _ok(self):
         self.result = {k: v.get().strip() for k, v in self.entries.items()}
         self.destroy()
 
 
-def form(parent, title, fields, ok_text="Guardar", note=None):
-    d = _FormDialog(parent, title, fields, ok_text, note)
+def form(parent, title, fields, ok_text="Guardar", note=None, extras=(), resumen=None):
+    d = _FormDialog(parent, title, fields, ok_text, note, extras, resumen)
     parent.wait_window(d)
     return d.result

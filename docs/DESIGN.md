@@ -260,6 +260,21 @@ clicable y lleva a esta.
   foco y ningún input de la ventana aceptaría teclas. Los diálogos (`dialog._Modal`)
   hacen igual al cerrarse.
 
+### Diálogo TP / SL
+
+- Lo abre el lápiz de la celda TP/SL con `dialog.form`, que acepta dos extras:
+  `extras=((texto, comando, habilitado), ...)` (botones a la izquierda de Cancelar; el
+  comando recibe el dict de campos) y `resumen=callable(campos)` (línea gris bajo los
+  campos, se repinta con cada tecla vía `trace_add`).
+- `Break-even` rellena el **SL** y se habilita solo si el precio de marca ya pasó el
+  break-even (`>` en LONG, `<` en SHORT). El precio va sin separador de miles: el campo
+  se convierte con `float()`.
+- Debajo de los campos, `TP <precio> → +x.xxxx USDT` y `SL <precio> → -x.xxxx USDT` con
+  lo que se gana o pierde si se ejecuta (PnL bruto, sin fees).
+- El break-even cubre comisión de entrada + funding ya cobrado + comisión de salida
+  estimada (la tasa efectiva del `totalFee` aplicada al nocional del propio break-even);
+  su línea muestra `→ +x.xxxx USDT` y `neto 0`.
+
 ---
 
 ## 8. Deuda visual conocida

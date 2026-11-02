@@ -5,11 +5,14 @@ import pytest
 from tests.fakes import FakeMexc
 from tradedesk.mexc import (
     MexcError,
+    break_even_price,
     close_vol,
     decorate_positions,
     display_name,
     fee_desglose,
+    mark_price,
     plan_tp_sl,
+    pnl_en_precio,
 )
 
 
@@ -98,3 +101,56 @@ def test_la_fee_aguanta_una_posicion_recien_abierta():
     detalle = fee_desglose({"totalFee": 0.2})
     assert (detalle["comision"], detalle["funding"], detalle["total"]) == (0.2, 0.0, 0.2)
     assert detalle["ahorro"] == 0.0
+
+
+def _pos(**extra):
+    """Posicion base para las cuentas de break-even: 100 USDT de nocional."""
+    base = {
+        "positionType": 1,
+        "holdVol": 10,
+        "holdAvgPrice": 100.0,
+        "_contractSize": 1.0,
+        "_priceScale": 2,
+        "totalFee": 0.2,
+        "holdFee": -0.1,
+    }
+    base.update(extra)
+    return base
+
+
+def test_mark_price_sale_del_pnl():
+    # +1 USDT sobre 10 contratos de 1 moneda = 0.10 por moneda
+    assert mark_price(_pos(unRealizedPnl=1.0)) == pytest.approx(100.1)
+    corto = _pos(positionType=2, unRealizedPnl=1.0)
+    assert mark_price(corto) == pytest.approx(99.9), "en SHORT la ganancia va al reves"
+
+
+def test_pnl_en_precio_long_y_short():
+    assert pnl_en_precio(_pos(), True, 103) == pytest.approx(30.0)
+    assert pnl_en_precio(_pos(), False, 103) == pytest.approx(-30.0)
+
+
+def test_break_even_cubre_comision_entrada_salida_y_funding():
+    """Con 0.2 de comision y 0.1 de funding, el SL tiene que dejar el neto en cero."""
+    be, cubre = break_even_price(_pos(), True)
+    assert be > 100, "el SL de un LONG se pone arriba de la entrada"
+    assert be == pytest.approx(100.06), "redondea hacia arriba al tick"
+    assert cubre == pytest.approx(10 * (be - 100), rel=1e-9)
+    # neto = PnL - (comision + funding + comision de salida): nunca negativo y
+    # como mucho un tick de mas (lo que agrega el redondeo)
+    salida = 0.2 / (10 * 100) * (10 * be)
+    neto = cubre - (0.2 + 0.1 + salida)
+    assert 0 <= neto < 0.01 * 10
+
+
+def test_break_even_short_va_debajo_y_redondea_hacia_afuera():
+    be, cubre = break_even_price(_pos(positionType=2), False)
+    assert be < 100
+    assert be == pytest.approx(99.95), "floor: el tick nunca deja perdida"
+    salida = 0.2 / (10 * 100) * (10 * be)
+    assert 0 <= cubre - (0.2 + 0.1 + salida) < 0.01 * 10
+
+
+def test_break_even_sin_tamano_no_inventa_un_precio():
+    assert break_even_price(_pos(holdVol=0), True) == (None, 0.0)
+    assert break_even_price(_pos(holdAvgPrice=0), True) == (None, 0.0)
