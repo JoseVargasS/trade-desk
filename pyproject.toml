@@ -12,6 +12,7 @@ dependencies = [
     "customtkinter>=6.0",
     "httpx>=0.28",
     "keyring>=25",
+    "PySide6-Essentials>=6.12",
 ]
 
 [project.optional-dependencies]
