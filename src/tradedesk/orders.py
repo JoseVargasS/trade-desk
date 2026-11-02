@@ -18,6 +18,7 @@ import customtkinter as ctk
 
 from . import theme as t
 from .dialog import Modal
+from .mexc import margen_inicial, num_texto
 from .table import STATES, Header, Pencil, sync_header_pad
 
 ORDER_COLS = (
@@ -425,12 +426,12 @@ class OrderEditor(Modal):
         ).grid(row=row + 1, column=0, columnspan=2, sticky="ew", padx=18)
 
         self.var_lev = ctk.StringVar(value=str(int(order.get("leverage") or 10)))
-        self.var_margen = ctk.StringVar(value=f"{_margen_inicial(order):.2f}")
+        self.var_margen = ctk.StringVar(value=f"{margen_inicial(order):.2f}")
         self.var_precio = ctk.StringVar(
             value=t.fmt_price_exact(order.get("price"), self.scale).replace(",", "")
         )
-        self.var_tp = ctk.StringVar(value=_num(order.get("takeProfitPrice")))
-        self.var_sl = ctk.StringVar(value=_num(order.get("stopLossPrice")))
+        self.var_tp = ctk.StringVar(value=num_texto(order.get("takeProfitPrice")))
+        self.var_sl = ctk.StringVar(value=num_texto(order.get("stopLossPrice")))
 
         row += 2
         self._campo(wrap, row, "Apalancamiento", self.var_lev, "x")
@@ -580,33 +581,6 @@ class OrderEditor(Modal):
             "scale": self.scale,
         }
         self.destroy()
-
-
-def _num(valor):
-    """Número para un campo de texto, sin ceros de relleno ni comas de miles."""
-    try:
-        numero = float(valor or 0)
-    except (TypeError, ValueError):
-        return ""
-    if not numero:
-        return ""
-    return f"{numero:.8f}".rstrip("0").rstrip(".")
-
-
-def _margen_inicial(order):
-    """Margen real de la orden (nocional / apalancamiento).
-
-    `orderMargin` incluye la comisión, así que guardar sin tocar nada cambiaría
-    el tamaño; se prefiere el margen limpio y solo se cae a `orderMargin` si
-    falta algún dato.
-    """
-    vol = float(order.get("vol") or 0)
-    size = float(order.get("_contractSize") or 0)
-    price = float(order.get("price") or 0)
-    lev = float(order.get("leverage") or 0)
-    if vol and size and price and lev:
-        return vol * size * price / lev
-    return float(order.get("orderMargin") or 0)
 
 
 def edit_order(parent, order, contract, to_vol):

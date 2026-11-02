@@ -187,6 +187,33 @@ def break_even_price(position, long_):
     return be, coins * (entry - be)
 
 
+def num_texto(valor):
+    """Número para un campo de texto, sin ceros de relleno ni comas de miles."""
+    try:
+        numero = float(valor or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not numero:
+        return ""
+    return f"{numero:.8f}".rstrip("0").rstrip(".")
+
+
+def margen_inicial(order):
+    """Margen real de la orden (nocional / apalancamiento).
+
+    `orderMargin` incluye la comisión, así que guardar sin tocar nada cambiaría
+    el tamaño; se prefiere el margen limpio y solo se cae a `orderMargin` si
+    falta algún dato.
+    """
+    vol = float(order.get("vol") or 0)
+    size = float(order.get("_contractSize") or 0)
+    price = float(order.get("price") or 0)
+    lev = float(order.get("leverage") or 0)
+    if vol and size and price and lev:
+        return vol * size * price / lev
+    return float(order.get("orderMargin") or 0)
+
+
 def decorate_positions(mx, positions):
     """Agrega a cada posicion lo que `open_positions` no devuelve: contrato,
     nombre de MEXC y el TP/SL vigente (que vive en otro endpoint)."""

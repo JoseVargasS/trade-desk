@@ -18,11 +18,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
-    QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
-    QPushButton,
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
@@ -40,8 +38,11 @@ from ..orders import PENCIL_COLS as ORDER_PENCILS
 from ..orders import ROW_H as ORDER_H
 from ..session import Session
 from ..table import ACTION_W, PENCIL_COLS, POS_COLS, ROW_H, STATES
+from . import dialogs
 from .cells import DelegadoCeldas, icono_lapiz, lineas
-from .style import fnt, qss
+from .style import Segmentado, qss
+from .style import boton as _boton
+from .style import etiqueta as _etiqueta
 
 PRESETS = (1, 5, 10, 15, 20, 50)
 
@@ -51,35 +52,6 @@ def _cuando(ms):
         return datetime.fromtimestamp(float(ms) / 1000).strftime("%d/%m %H:%M")
     except Exception:
         return "—"
-
-
-def _etiqueta(texto, size=13, bold=False, muted=False, color=None):
-    etiqueta = QLabel(texto)
-    etiqueta.setFont(fnt(size, bold))
-    if muted:
-        etiqueta.setProperty("muted", "true")
-    if color:
-        etiqueta.setStyleSheet(f"color: {color}; background: transparent;")
-    return etiqueta
-
-
-def _boton(texto, ancho=None, alto=22, fondo=None, color=None, radio=None, size=11, borde=True):
-    boton = QPushButton(texto)
-    boton.setCursor(Qt.PointingHandCursor)
-    boton.setFont(fnt(size))
-    fondo = fondo or t.INPUT
-    color = color or t.TEXT
-    radio = t.R_CHIP if radio is None else radio
-    marco = f"1px solid {t.BORDER}" if borde else "0px"
-    boton.setStyleSheet(
-        f"QPushButton {{ background: {fondo}; color: {color}; border: {marco};"
-        f" border-radius: {radio}px; }}"
-        f"QPushButton:hover {{ border: 1px solid {t.MUTED}; }}"
-    )
-    if ancho:
-        boton.setFixedWidth(ancho)
-    boton.setFixedHeight(alto)
-    return boton
 
 
 def _tabla(columnas, alto_fila):
@@ -131,39 +103,6 @@ class BarraCierre(QWidget):
         columna.setSpacing(4)
         columna.addLayout(fila1)
         columna.addLayout(fila2)
-
-
-class Segmentado(QWidget):
-    """Dos opciones excluyentes, como el CTkSegmentedButton de la app."""
-
-    def __init__(self, opciones, elegida, al_cambiar):
-        super().__init__()
-        self.al_cambiar = al_cambiar
-        self.elegida = elegida
-        self.botones = {}
-        fila = QHBoxLayout(self)
-        fila.setContentsMargins(0, 0, 0, 0)
-        fila.setSpacing(2)
-        for texto in opciones:
-            boton = _boton(texto, None, 24, size=10)
-            boton.clicked.connect(lambda _=False, cual=texto: self._elegir(cual))
-            fila.addWidget(boton)
-            self.botones[texto] = boton
-        self._pintar()
-
-    def _elegir(self, texto):
-        self.elegida = texto
-        self._pintar()
-        self.al_cambiar(texto)
-
-    def _pintar(self):
-        for texto, boton in self.botones.items():
-            activo = texto == self.elegida
-            boton.setStyleSheet(
-                f"QPushButton {{ background: {t.SURFACE if activo else t.INPUT};"
-                f" color: {t.TEXT if activo else t.MUTED}; border: 1px solid {t.BORDER};"
-                f" border-radius: {t.R_CHIP}px; }}"
-            )
 
 
 class Tarjeta(QFrame):
@@ -321,6 +260,8 @@ class VistaQt(QMainWindow):
         self.resize(1800, 1000)
         self._posiciones = []
         self._tarjetas = {}
+        self._avisos = []
+        self._mostrando = False
 
         central = QWidget()
         central.setObjectName("central")
@@ -328,9 +269,6 @@ class VistaQt(QMainWindow):
         raiz.setContentsMargins(16, 16, 16, 8)
         raiz.setSpacing(8)
         raiz.addWidget(self._cabecera())
-        self._aviso = _etiqueta("", 12, muted=True)
-        self._aviso.hide()
-        raiz.addWidget(self._aviso)
         raiz.addWidget(self._armar_deck())
         raiz.addWidget(self._armar_pestanas(), 1)
 
@@ -432,11 +370,10 @@ class VistaQt(QMainWindow):
             try:
                 mensaje = self.session.q.get_nowait()
             except queue.Empty:
-                return
+                break
             tipo = mensaje[0]
             if tipo == "error":
-                self._aviso.setText(mensaje[1])
-                self._aviso.show()
+                self._notificar("Error", mensaje[1], danger=True)
             elif tipo == "cards":
                 self._pintar_deck(mensaje[1])
             elif tipo == "ticker":
@@ -446,6 +383,23 @@ class VistaQt(QMainWindow):
                 self._pintar_posiciones(self._posiciones)
             elif tipo == "orders":
                 self._pintar_ordenes(mensaje[1])
+        # un modal dentro de _drenar congela el refresco: se abre al volver al bucle
+        QTimer.singleShot(0, self._siguiente_aviso)
+
+    def _notificar(self, titulo, mensaje, aviso=None, danger=False):
+        self._avisos.append((titulo, mensaje, aviso, danger))
+        QTimer.singleShot(0, self._siguiente_aviso)
+
+    def _siguiente_aviso(self):
+        if self._mostrando or not self._avisos:
+            return
+        self._mostrando = True
+        titulo, mensaje, aviso, danger = self._avisos.pop(0)
+        try:
+            dialogs.show(self, titulo, mensaje, aviso=aviso, danger=danger)
+        finally:
+            self._mostrando = False
+        QTimer.singleShot(0, self._siguiente_aviso)
 
     def _avisar(self, que):
         self.statusBar().showMessage(f"{que}: se conecta en F5 (esta vista no envía órdenes)")
@@ -459,7 +413,6 @@ class VistaQt(QMainWindow):
         )
 
     def _pintar_deck(self, tarjetas):
-        self._aviso.hide()
         while self._fila_tarjetas.count() > 1:
             elemento = self._fila_tarjetas.takeAt(0)
             if elemento.widget():
