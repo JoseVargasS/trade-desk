@@ -94,17 +94,16 @@ cantidad, precio, PnL, fee y estado. Se refresca cada 15 s mientras esté abiert
 ```
 app.py                  lanzador (lo que abre el acceso directo)
 src/tradedesk/          la app
-  app.py                ventana, estado, pollers, órdenes
-  actions.py            cerrar, reverse, TP/SL, margen
-  cards.py              tarjeta de operación
-  closebar.py           precio + % de cierre + botones de la fila
-  table.py              tablas de posiciones e historial
-  search.py             buscador de pares
-  dialog.py             diálogos de confirmación y aviso
+  session.py            pollers, cola, config y caches
+  controller.py         abrir, cerrar, reverse, TP/SL, margen y órdenes
+  forms.py              parseo de tarjetas y del editor de orden
+  layout.py             anchos y altos de las tablas
+  pairs.py              filtro del buscador de pares
   theme.py              tokens de color, fuente y formatos
   mexc.py               firma HMAC, endpoints, USDT → contratos, fee, liquidación
   creds.py              Windows Credential Manager
   paths.py              dónde viven los datos y los assets
+  qt/                   ventana, diálogos, estilos y buscador (PySide6)
   assets/               iconos y fuentes Geist
 tests/                  pruebas (pytest)
 tools/                  utilidades: icono, chequeos contra la API y la cuenta
@@ -112,16 +111,15 @@ docs/DESIGN.md          sistema de diseño
 AGENTS.md               reglas para agentes
 ```
 
-Los datos (`config.json`, `trades.log`, `perf.log`) viven en la raíz del repo y git los ignora.
+Los datos (`config.json`, `trades.log`) viven en la raíz del repo y git los ignora.
 
-Requiere Python 3.11+: `pip install -e ".[dev]"` (o `pip install customtkinter httpx keyring`).
+Requiere Python 3.11+: `pip install -e ".[dev]"` (o `pip install PySide6-Essentials httpx keyring`).
 
 Verificación:
 
 ```powershell
 scripts\check.bat             # lint + formato + tests
 python -m pytest              # solo los tests
-python -m pytest -m ui        # los de ventana (miden la fila)
 python tools/smoke_api.py     # red: precio, contrato, conversión de tamaño
 python tools/smoke_live.py 9  # abre la app 9 s con la cuenta real y la cierra
 python tools/check_account.py # consulta la cuenta: saldo, posiciones, historial

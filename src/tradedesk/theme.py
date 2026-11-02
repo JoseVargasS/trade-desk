@@ -6,7 +6,6 @@ Las reglas de uso estan en AGENTS.md y docs/DESIGN.md.
 
 import ctypes
 import os
-import tkinter.font as tkfont
 
 from .paths import ASSETS
 
@@ -51,17 +50,15 @@ PAD = 8
 
 # ------------------------------------------------------------------ tipografia
 FONT_DIR = str(ASSETS / "fonts")
-_FALLBACK = {"Geist": "Segoe UI"}
 
 _loaded = False
 UI = "Geist"
 NUM = "Geist"  # numeros: Geist proporcional, ~19% mas angosto que Geist Mono
-SCALE = 1.0  # escala de CustomTkinter (DPI); la fija resolve_fonts
 
 
 def load_fonts():
     """Registra los TTF en este proceso. No los instala en Windows."""
-    global _loaded, UI, NUM
+    global _loaded
     if _loaded:
         return
     if os.name == "nt" and os.path.isdir(FONT_DIR):
@@ -69,40 +66,6 @@ def load_fonts():
             if name.lower().endswith(".ttf"):
                 ctypes.windll.gdi32.AddFontResourceExW(os.path.join(FONT_DIR, name), 0x10, 0)
     _loaded = True
-
-
-def resolve_fonts(root):
-    """Debe llamarse despues de crear el Tk root."""
-    global UI, NUM, SCALE
-    load_fonts()
-    available = set(tkfont.families(root))
-    UI = "Geist" if "Geist" in available else _FALLBACK["Geist"]
-    NUM = UI
-    try:
-        SCALE = float(root._get_widget_scaling())
-    except Exception:
-        SCALE = 1.0
-    return UI, NUM
-
-
-def _px(size):
-    """Tamano en pixeles, como CustomTkinter (size negativo = pixeles)."""
-    return -max(1, round(abs(size) * SCALE))
-
-
-def px(length):
-    """Largo en pixeles con la escala de CustomTkinter (anchos, altos)."""
-    return max(1, round(abs(length) * SCALE))
-
-
-def ui_font(size, bold=False):
-    """Fuente para widgets tk nativos (Label/Frame del sistema), en pixeles."""
-    return (UI, _px(size), "bold" if bold else "normal")
-
-
-def num_font(size, bold=False):
-    """Igual que ui_font, para numeros."""
-    return (NUM, _px(size), "bold" if bold else "normal")
 
 
 # ------------------------------------------------------------------- formatos

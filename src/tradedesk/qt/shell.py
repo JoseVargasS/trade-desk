@@ -1,6 +1,6 @@
 """Ventana de prueba en Qt: cabecera, 8 tarjetas, pestañas y una tabla de 200 filas.
 
-Es solo para medir el repintado: no habla con MEXC y no reemplaza la app de Tkinter.
+Es solo para medir el repintado: no habla con MEXC.
 """
 
 from PySide6.QtCore import Qt

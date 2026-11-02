@@ -5,11 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trade-desk"
 version = "0.1.0"
-description = "Mesa de ejecucion para futuros de MEXC en Windows (Tkinter)"
+description = "Mesa de ejecucion para futuros de MEXC en Windows (Qt)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "customtkinter>=6.0",
     "httpx>=0.28",
     "keyring>=25",
     "PySide6-Essentials>=6.12",
@@ -36,9 +35,6 @@ tradedesk = ["assets/*.ico", "assets/*.png", "assets/fonts/*.ttf"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
-markers = [
-    "ui: abre una ventana Tk (se salta solo si no hay display)",
-]
 
 # --------------------------------------------------------------------- ruff
 [tool.ruff]

@@ -2,7 +2,7 @@
 
 import pytest
 
-from tradedesk.search import filter_markets
+from tradedesk.pairs import filter_markets
 
 MARKETS = {
     "BTC_USDT": {

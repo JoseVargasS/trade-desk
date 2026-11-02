@@ -1,7 +1,7 @@
-"""Ventanas de la vista Qt: confirmar, avisar, formularios y TP/SL.
+"""Ventanas de la vista Qt: confirmar, avisar, formularios, editor y TP/SL.
 
-Port de `dialog.py` (Tk) con la misma API y el mismo aspecto: sin marco, borde de
-1 px, `Esc` cancela y `Enter` acepta. Nada de `QMessageBox` (queda gris).
+Sin marco, borde de 1 px, `Esc` cancela y `Enter` acepta. Nada de `QMessageBox`
+(queda gris): el estilo sale de `qt/style.py`.
 """
 
 import threading
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme as t
+from ..forms import valores_orden
 from ..mexc import break_even_price, margen_inicial, num_texto, pnl_en_precio
 from .style import Segmentado, boton, etiqueta, fnt, qss
 
@@ -398,17 +399,13 @@ class EditorOrden(Modal):
 
     def _valores(self):
         """(lev, margen, precio, tp, sl) o None si algo no es número."""
-        try:
-            lev = int(float(self.campos["lev"].text().replace(",", "")))
-            margen = float(self.campos["margen"].text().replace(",", ""))
-            precio = float(self.campos["precio"].text().replace(",", ""))
-            tp = float(self.campos["tp"].text().replace(",", "") or 0)
-            sl = float(self.campos["sl"].text().replace(",", "") or 0)
-        except ValueError:
-            return None
-        if lev < 1 or margen <= 0 or precio <= 0 or tp < 0 or sl < 0:
-            return None
-        return lev, margen, precio, tp, sl
+        return valores_orden(
+            self.campos["lev"].text(),
+            self.campos["margen"].text(),
+            self.campos["precio"].text(),
+            self.campos["tp"].text(),
+            self.campos["sl"].text(),
+        )
 
     def _calc(self, *_):
         valores = self._valores()
@@ -532,8 +529,8 @@ def _lineas_pnl(pos, long_, tp, sl):
 def editar_tpsl(parent, pos, long_, precio):
     """Lápiz de TP/SL: devuelve {'tp': texto, 'sl': texto} o None.
 
-    Es el port del diálogo de `actions._edit_tpsl`: mismos campos, la línea viva
-    con el PnL y el botón *Break-even* con `mexc.break_even_price`.
+    Es el diálogo del lápiz de TP/SL: mismos campos, la línea viva con el PnL y
+    el botón *Break-even* con `mexc.break_even_price`.
     """
     escala = int(pos.get("_priceScale") or 2)
     be, cubre = break_even_price(pos, long_)

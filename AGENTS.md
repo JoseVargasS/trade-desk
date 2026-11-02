@@ -9,7 +9,7 @@ Si algo aquí no coincide con el código, el código manda: corrige este archivo
 
 **Dónde está cada cosa.** El código vive en `src/tradedesk/` (layout `src`), los tests en
 `tests/`, los assets **dentro del paquete** (`src/tradedesk/assets/`), los scripts sueltos en
-`tools/` y los datos del usuario (`config.json`, `trades.log`, `perf.log`) en la raíz del repo,
+`tools/` y los datos del usuario (`config.json`, `trades.log`) en la raíz del repo,
 nunca dentro del paquete: esas rutas las resuelve `tradedesk/paths.py`.
 
 **Arranque.** `app.py` en la raíz es **solo el lanzador** (el acceso directo del escritorio
@@ -21,7 +21,7 @@ el acceso directo, o la app deja de abrir con doble clic.
 
 ```powershell
 pip install -e ".[dev]"     # deps de la app + pytest/ruff/pre-commit
-python -m pytest            # 70 tests (~20 s); los `ui` se saltan sin ventana
+python -m pytest            # ~70 tests (~15 s): logica pura, payloads y parseo
 python -m ruff check .      # lint
 python -m ruff format .     # formato (obligatorio: CI corre --check)
 scripts\check.bat           # lint + formato + tests de una
@@ -32,23 +32,22 @@ scripts\check.bat           # lint + formato + tests de una
 - **La ruta de órdenes tiene red de seguridad**: `tests/test_mexc_orders.py` fija los payloads de
   `open_market` y `close_position` (side, type, vol, precio redondeado a `priceScale`). Si cambias
   un payload, cambia el test en el mismo commit. Nunca se prueba contra la cuenta real en tests.
-- **Ningún hilo toca widgets**: `tests/test_no_threaded_widgets.py` lee el fuente y falla si un
-  `*_worker` llama a `configure` / `set_*`. Los hilos solo hablan por `self.q`.
-- **La fila de posiciones no crece**: `tests/test_ui_smoke.py` mide anchos, alto y los cuatro
-  controles de la barra de cierre. Si se pasa, recorta columnas; no ensanches la ventana.
-- **Ruff mandó el formato**: los archivos ocupan ~15 % más líneas que antes (una llamada de
-  Tkinter con muchos argumentos queda un argumento por línea). El tope real ahora es **~700
-  líneas**; `app.py` ya se partió en `ui.py` por eso: lo siguiente que se le agregue a la
-  ventana va a `ui.py`.
-- Colores, fuentes y formatos numéricos **solo** en `theme.py`. Los widgets de las tablas son
-  `tk.Label`/`tk.Frame` nativos (pintan ~3x más rápido que los CTk, que son Canvas aparte);
-  usan `theme.num_font` / `theme.ui_font`, que dan el tamaño en **píxeles** ya escalado.
+- **Ningún hilo toca widgets**: `tests/test_no_threaded_widgets.py` lee el fuente (controller y
+  la vista Qt) y falla si un `*_worker` llama a `configure` / `set_*`. Los hilos solo hablan por
+  `session.q`; Qt no es thread-safe.
+- **La fila de posiciones no crece**: `tests/test_layout.py` fija el ancho total. Si se pasa,
+  recorta columnas; no ensanches la ventana.
+- **Ruff mandó el formato**: los archivos ocupan ~15 % más líneas que antes (una llamada con
+  muchos argumentos queda un argumento por línea). El tope real es **~700 líneas**; si un
+  archivo se cruza, se parte por responsabilidad (`view.py` ya salió de `shell.py`).
+- Colores, fuentes y formatos numéricos **solo** en `theme.py`. La vista Qt usa
+  `qt.style.fnt`, que da el tamaño en **píxeles** (no en puntos).
 - **Solo se corre el test que cubre lo que se tocó** (matriz en §9). Nunca la suite entera "por
-  si acaso": cuesta ~18 s y gasta cuota del usuario sin aportar nada si el cambio fue de un
+  si acaso": cuesta ~15 s y gasta cuota del usuario sin aportar nada si el cambio fue de un
   texto o un decimal. Si no hay test para esa zona, alcanza con mirar el resultado (captura).
 - Después de tocar UI: `python tools/smoke_live.py 9` (arranca 9 s, pinta las posiciones reales y
-  cierra sola; no envía órdenes) y, si se tocaron tablas, `python tools/medir_repintado.py`
-  (mide lo que tarda la ventana en repintarse al restaurarla desde minimizada).
+  cierra sola; no envía órdenes). Si se tocaron tablas, `python tools/qt_probe.py` mide el
+  repintado con 8 tarjetas y 200 filas.
 - Antes de commitear: `scripts\check.bat` en verde (una sola vez, no en cada paso).
 
 ---
@@ -65,7 +64,7 @@ tarda 300-800 ms porque pasa por su gateway, su sesión y su render).
 
 Decisiones de fondo que **no** están en discusión:
 
-- Escritorio nativo (Tkinter + CustomTkinter), **no** web local. Un servidor local abre un
+- Escritorio nativo (**PySide6**), **no** web local. Un servidor local abre un
   puerto que no hace falta, y un navegador reintroduce el costo que se quería eliminar.
 - **No** `.exe` por ahora: PyInstaller sin firmar dispara SmartScreen/Defender. Se usa un
   acceso directo con ícono, que para el usuario se comporta igual.
@@ -77,7 +76,7 @@ Decisiones de fondo que **no** están en discusión:
 ## 2. Cómo lo usa el usuario (flujo real)
 
 1. Abre `Trade Desk` (acceso directo del escritorio). Arranca **sin tarjetas**.
-2. `+ Añadir par` → buscador flotante → escribe (`btc`, `sol`) → `Enter` toma el primero.
+2. `+ Añadir par` → buscador modal → escribe (`btc`, `sol`) → `Enter` toma el primero.
 3. Configura apalancamiento (entry o presets 1/5/10/15/20/50), margen (Aislado por defecto),
    modo de tamaño (Margen o Nocional) y escribe el **tamaño en USDT** (vacío por defecto).
 4. Opcional: TP y SL.
@@ -99,8 +98,7 @@ Decisiones de fondo que **no** están en discusión:
    apalancamiento, monto, precio, llenado, margen usado, TP/SL en dos líneas, fee y estado.
    Los **lápices** de Monto, Precio y TP/SL abren el editor (lado, apalancamiento, margen,
    precio, TP y SL); en la columna de acciones están `Modificar` y `Cancelar`, y arriba a la
-   derecha `Cancelar todo`. El aviso `N pendientes` de la pestaña Posiciones lleva aquí.
-   Una orden límite no aparece en Posiciones hasta que se llena.
+   derecha `Cancelar todo`. Una orden límite no aparece en Posiciones hasta que se llena.
 9. Pestaña **Historial**: últimas 50 órdenes (ejecutadas, canceladas, pendientes).
 
 `DRY-RUN` viene **siempre encendido** en cada arranque y bloquea **abrir, cerrar y reverse**.
@@ -116,47 +114,52 @@ es abrir.
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
   src/tradedesk/
-    __main__.py             arranque: AppUserModelID + CTk + App            25
-    paths.py                DATA_DIR (raiz) y ASSETS (paquete)             13
-    app.py                  estado, pollers, preview, ordenes             562
-    ui.py                   arma la ventana: cabecera, tabs, tarjetas     210
-    actions.py              cerrar, reverse, TP/SL, margen, cancelar      414
-    cards.py                TradeCard: una tarjeta por par                 396
-    closebar.py             precio + % de cierre + botones de la fila     456
-    orders.py               tabla de ordenes estilo MEXC + editor           616
-    tooltip.py              numero con subrayado + detalle de fee         127
-    table.py                PositionsTable + HistoryTable                 594
-    search.py               SearchPopup + filter_markets()                209
-    dialog.py               confirm / show / ask_key (sin messagebox)     394
-    theme.py                color, tipografia, radios, formatos           161
-    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   476
+    __main__.py             arranque: AppUserModelID + vista Qt           18
+    paths.py                DATA_DIR (raiz) y ASSETS (paquete)            13
+    session.py              pollers, cola, config y caches sin UI         210
+    controller.py           casos de uso: abrir, cerrar, TP/SL, ordenes   420
+    forms.py                parseo puro de tarjeta y editor de orden       60
+    layout.py               anchos/altos de las tablas (sin UI)            60
+    pairs.py                filtro puro del buscador de pares              60
+    theme.py                color, tipografia, radios, formatos           120
+    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   500
     creds.py                Windows Credential Manager                     29
     assets/                 icon.ico, icon.png, fonts/*.ttf
-  tests/                    pytest: logica pura, payloads, UI (`-m ui`)
-  tools/                    make_icon, smoke_api, smoke_live, check_account, medir_repintado
+    qt/
+      __main__.py           abre la ventana                                 26
+      view.py               ventana: cabecera, deck, tablas, drenaje        682
+      tarjeta.py            tarjeta de par y barra de cierre de la fila    279
+      dialogs.py            confirm, aviso, form, API key, TP/SL, editor   568
+      style.py              fnt, etiqueta, boton, Segmentado, qss           160
+      search.py             buscador de pares                               90
+      cells.py              delegado de celdas + icono de lapiz             71
+      shell.py              ventana de prueba para medir repintado        152
+  tests/                    pytest: logica pura, payloads y parseo
+  tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
   scripts/check.bat         lint + formato + tests
 ```
 
 Ningún archivo debe pasar de **~700 líneas** (el formato de ruff suma ~15 % al conteo).
-Si se cruza, se divide por responsabilidad: `ui.py` salió de `app.py` y `orders.py` de
-`table.py` por eso mismo. Lo siguiente que se le agregue a la ventana va a `ui.py`.
+Si se cruza, se divide por responsabilidad: `view.py` ya salió de `shell.py`.
 
 ### Flujo de datos
 
-Todo pasa por **una cola** (`self.q`) y un solo consumidor en el hilo de la UI (`_drain`,
-cada 120 ms). Ningún hilo toca widgets.
+Todo pasa por **una cola** (`session.q`) y un solo consumidor en el hilo de la UI
+(`VistaQt._drenar`, cada 120 ms). Ningún hilo toca widgets.
 
 ```
-hilo _poll  ──►  q.put(("ticker", ...))      precio por tarjeta, round-robin
-             ──►  q.put(("positions", ...))   cada 3 s
-             ──►  q.put(("orders", ...))      órdenes abiertas, cada 3 s
-             ──►  q.put(("history", ...))     cada 15 s, solo en su pestaña
-hilo _calc  ──►  q.put(("preview", ...))     contratos/fee/liq por tarjeta
-hilo orden  ──►  q.put(("order", ...))       resultado de la orden
+hilo _poll      ──►  q.put(("ticker", ...))      precio por tarjeta, round-robin
+                ──►  q.put(("positions", ...))   cada 3 s
+                ──►  q.put(("orders", ...))      órdenes abiertas, cada 3 s
+                ──►  q.put(("history", ...))     cada 15 s, solo en su pestaña
+hilo catálogo   ──►  q.put(("markets", ...))     1.171 pares del buscador
+hilo ip         ──►  q.put(("ip", ...))          IP pública para la cabecera
+hilo orden      ──►  q.put(("order", ...))       resultado de la orden
 ```
 
-`_drain` traduce cada mensaje a widgets. Las órdenes corren en su propio hilo para no
-congelar la UI; los botones de la tarjeta se deshabilitan mientras tanto (`set_busy`).
+`controller.Control` recibe `session` y un `UiPort` (`qt.dialogs.QtPort`) con
+`confirm`, `show`, `form`, `tpsl`, `editar_orden` y `status`. La UI solo pinta y lee
+los controles; los casos de uso y los payloads viven en el controlador.
 
 ### Persistencia
 
@@ -270,7 +273,8 @@ en la cabecera con botón para copiarla.
 
 ## 6. Reglas de UI (resumen; el detalle está en `docs/DESIGN.md`)
 
-- Tokens **solo** en `theme.py`. Ningún color o fuente literal en otro archivo.
+- Tokens **solo** en `theme.py`. Ningún color o fuente literal en otro archivo; el QSS sale de
+  `qt/style.py::qss()`.
 - UI en `Geist`, **todo número en `theme.NUM`**, que es la misma familia (proporcional,
   no tabular): las columnas van alineadas a la derecha, así que el borde derecho no se mueve.
   Se probó `Geist Mono` y se descartó por ~19 % más ancha. Se registran en el proceso con
@@ -278,38 +282,19 @@ en la cabecera con botón para copiarla.
 - Todo número se formatea con `theme.fmt_*`. PnL y fee con 4 decimales; precios de orden
   límite con `fmt_price_exact` (`priceScale` del contrato).
 - La fila de posiciones no crece: la barra de cierre va en dos líneas dentro de los 200 px
-  de la columna de acciones (`[Mercado ▾][100% ▾]` / `[Cerrar LONG][Reverse]`). Sus popups
-  se anclan bajo el control, no se centran, y **no** usan `grab_set` (ver más abajo).
-- Nada de `messagebox`: usar `dialog.confirm` / `dialog.show` / `dialog.ask_key`.
-- La tabla **no usa `ttk.Treeview`** (no permite color por celda).
-- `pack` reparte espacio en orden de llamada: lo que no debe encogerse va **primero**.
+  de la columna de acciones (`[Mercado ▾][100% ▾]` / `[Cerrar LONG][Reverse]`).
+- Nada de `QMessageBox` ni de messagebox clásico: usar `qt.dialogs.confirm` / `show` /
+  `ask_key` / `form` (QDialog sin marco, borde de 1 px, `Esc` cancela y `Enter` acepta).
 - **Ningún worker toca widgets.** Los hilos solo hacen `q.put`; el hilo de la UI pinta.
-  Comprobado por `tests/test_no_threaded_widgets.py`: un `configure`/`set_*` desde un hilo
-  deja la ventana sorda.
-- **Ningún request desde el hilo de la UI.** `_open_search` carga el catálogo en un hilo y
-  abre el popup por la cola. Pedirlo en línea congelaba la ventana hasta 8 s. El editor de
-  órdenes calcula los contratos con `size_to_vol(..., contract=cacheado)`, sin pedir nada.
-- El buscador es **modal** (`grab_set`): si quedaba abierto flotando sobre las tarjetas se
-  comía los clics y parecía que los inputs estaban deshabilitados.
-- **Nunca uses `_root`, `anchor` ni `size` como atributos de un widget.** Son métodos
-  de tkinter (`Misc._root`, `grid_anchor`, `grid_size`); pisarlos rompe la resolución de
-  eventos (`%W` → `nametowidget` → `_root()`) y el error se lleva el `mainloop`: la app
-  se cierra. En `closebar` son `_ventana`, `_ancla` y `contract_size`.
-- **Los paneles flotantes (precio y %) no usan `grab_set`.** Un grab local se traga el
-  primer clic de afuera: cerraba el panel pero el input que tocabas no recibía el clic ni
-  el teclado, y el foco quedaba en el chip. Ahora se cierran con el primer clic dentro de
-  la ventana (ese clic igual llega a su destino) y solo devuelven el foco al chip si el
-  panel todavía lo tenía.
-- **Un panel que se lleva el teclado tiene que devolverlo al cerrarse.** `_Popup.show()`
-  usa `focus_force` (sin eso su caja de precio no recibe teclas). Al morir esa ventana
-  Tk queda **sin ventana con foco** y `focus_set` sobre la ventana grande queda diferido:
-  ningún input acepta teclas (síntoma: "el campo está deshabilitado"). `destroy` llama
-  `self._ventana.focus_force()` antes de pasarle el foco al chip; con `focus_set` solo no
-  alcanza. Es el mismo `parent.focus_force()` que hacen `SearchPopup` y `dialog.Modal`.
-- **Ningún `dialog.show`/`confirm` dentro de `_drain`.** Un modal ahí adentro congela el
-  callback todo el tiempo que el usuario lo deje abierto (`perf.log` llegó a registrar
-  drains de 1.6 s). Los avisos pasan por `App._notice`, que los encola y abre uno por vez
-  fuera del drain (`tests/test_app_notices.py`).
+  Comprobado por `tests/test_no_threaded_widgets.py`.
+- **Ningún request desde el hilo de la UI.** El catálogo lo carga `Session` en su hilo y la
+  vista abre el buscador por la cola. El editor de órdenes calcula los contratos con
+  `size_to_vol(..., contract=cacheado)`, sin pedir nada.
+- **Ningún `show`/`confirm` dentro de `_drenar`.** Un modal ahí adentro congela el refresco.
+  Los avisos pasan por `VistaQt._notificar`, que los encola y abre uno por vez fuera del drain.
+- Los avisos de la API se ven en la UI (barra de estado o diálogo), nunca se silencian.
+- La selección de posiciones se restaura por `positionId` en cada refresco; no se pierde
+  porque el poller reemplace las filas cada 3 s.
 
 ---
 
@@ -330,7 +315,7 @@ en la cabecera con botón para copiarla.
 | **El color del botón de cerrar sigue al PnL** | Es el dato que se mira antes de decidir; el lado va en el texto |
 | **Modificar una orden = cancelar y reenviar** | MEXC no deja editar una orden viva: se cancela, se espera a que libere el margen (`_wait_order_gone`) y se envía la nueva. El editor lo avisa en amarillo |
 | **La tabla de órdenes imita a MEXC** | Es el panel que el usuario ya conoce: par + `Perpetual` con el % llenado, TP/SL en dos líneas y lápiz en Monto/Precio/TP-SL |
-| **Cero dependencias de UI nuevas** | `customtkinter` + `httpx` + `keyring`. Nada de Qt (200 MB) |
+| **Qt (PySide6) en vez de Tkinter** | Con 8 tarjetas y 200 filas, restaurar la ventana tarda ~50 ms contra 943 ms en Tk (`tools/qt_probe.py`). La lógica vive en `controller.py`, así que el cambio de UI no tocó payloads |
 
 ---
 
@@ -340,94 +325,46 @@ en la cabecera con botón para copiarla.
 2. **`takerFeeRate` inconsistente** entre `/contract/detail` (individual) y el catálogo.
    `markets()` **no** debe alimentar el cache de `contract()`.
 3. **Rate limit del ticker**: 10/2 s. Un loop a 5/s lo rompe.
-4. **`pack` y barras inferiores**: si empaquetas la tabla con `expand=True` antes que la barra
-   de acciones, la barra queda en 0 px.
-5. **Tarjeta cortada**: `grid_propagate(False)` exige `height` explícito.
-6. **Buscador vacío al inicio**: se le pasaba `self.mx._markets` (`None` antes de la primera
-   carga) y el constructor moría antes de programar el foco. Usar `App.markets()`.
-7. **Ícono de Python en la barra de tareas**: hay que declarar `iconbitmap` + `iconphoto` y
-   fijar `SetCurrentProcessExplicitAppUserModelID` **antes** de crear la ventana.
-8. **`CTkEntry` con `placeholder_text` no acepta tecleo**: el placeholder se escribe como
-   texto real y el clic en el `tk.Entry` interno no siempre lo limpia; el campo queda sordo.
-   Los campos de las tarjetas y de los formularios usan **`textvariable` sin placeholder**
-   y una etiqueta aparte. La excepción son el buscador y el diálogo de API key: ahí el
-   foco se fuerza al abrir, así que el placeholder nunca queda delante del cursor.
-9. **Chip del par encima de la ✕**: empacar la ✕ primero (`side="right"`) y el chip con
-   `fill="x", expand=True`.
-10. **Selección perdida en cada refresco**: se restaura por `positionId`, no por `iid`.
-11. **TP/SL no vienen en `open_positions`**: hay que cruzarlos con `stoporder/list/orders`.
-    Al reemplazar, cancelar primero (`stoporder/cancel`) o MEXC acumula órdenes huérfanas.
-12. **El buscador flotando encima de las tarjetas**: `SearchPopup` es `overrideredirect` y
-    antes no era modal. Si quedaba abierto tapaba los inputs y los clics no llegaban
-    (se percibía como "el campo está deshabilitado unos segundos"). Ahora abre con
-    `grab_set()`, se cierra con `Escape`, con clic en su fondo o al elegir, y devuelve el foco.
-13. **`markets()` desde el hilo de la UI**: 0.5 s en frío y hasta 8 s si el request se cuelga.
-    `_open_search` lo pide en un hilo y abre el popup por la cola.
-14. **Un worker tocando un widget deja la ventana sorda**: Tkinter no es thread-safe.
-    Un `card.set_preview(...)` desde un hilo bloquea el bucle de eventos y la UI deja de
-    responder varios segundos (se vio como "el input está deshabilitado y luego revive").
-    Los hilos **solo** hablan por `self.q`. `tests/test_no_threaded_widgets.py` falla si un
-    `*_worker` llama a
-    `configure`, `set_*`, `insert` o `delete` sobre un widget.
-15. **TP/SL rechazado con 5003 en el caso más normal**: si entras en ganancia y pones el SL
-    por encima del precio (LONG), MEXC lo rechaza porque ahí el único nivel válido es el TP.
-    `plan_tp_sl()` lo mueve a TP y avisa por diálogo; si el TP ya está en ese lado, explica
-    que deje el SL del lado de la pérdida en vez de mostrar el error en inglés.
-16. **TP/SL rechazado con 5004 al reemplazar**: cancelar y recolocar sin esperar deja la
+4. **Buscador vacío al inicio**: se le pasaba el catálogo antes de la primera carga y el
+   constructor moría antes de programar el foco. Ahora `Session` publica `("markets", ...)`
+   cuando termina y la vista avisa "todavía se está cargando" si se abre antes.
+5. **Ícono de Python en la barra de tareas**: `SetCurrentProcessExplicitAppUserModelID` tiene
+   que fijarse **antes** de crear la ventana, y la app declara `QIcon` (`__main__.py`).
+6. **TP/SL no vienen en `open_positions`**: hay que cruzarlos con `stoporder/list/orders`.
+   Al reemplazar, cancelar primero (`stoporder/cancel`) o MEXC acumula órdenes huérfanas.
+7. **`markets()` desde el hilo de la UI**: 0.5 s en frío y hasta 8 s si el request se cuelga.
+   `Session._cargar_catalogo` lo pide en su hilo; la vista nunca llama a la red.
+8. **Un worker tocando un widget deja la ventana sorda**: Qt tampoco es thread-safe. Un
+   `Tarjeta.set_preview(...)` desde un hilo bloquea el bucle de eventos y la UI deja de
+   responder varios segundos. Los hilos **solo** hablan por `session.q`.
+   `tests/test_no_threaded_widgets.py` falla si un `*_worker` llama a `configure`, `set_*`,
+   `insert` o `delete` sobre un widget.
+9. **TP/SL rechazado con 5003 en el caso más normal**: si entras en ganancia y pones el SL
+   por encima del precio (LONG), MEXC lo rechaza porque ahí el único nivel válido es el TP.
+   `plan_tp_sl()` lo mueve a TP y avisa por diálogo; si el TP ya está en ese lado, explica
+   que deje el SL del lado de la pérdida en vez de mostrar el error en inglés.
+10. **TP/SL rechazado con 5004 al reemplazar**: cancelar y recolocar sin esperar deja la
     orden vieja contabilizada. `_wait_tpsl_clear()` sondea `stoporder/list/orders` hasta
     que la posición queda a 0 (máx. 2.5 s) antes de volver a colocar.
-
-18. **"No puedo escribir en el input" después de usar un popup (Mercado/Límite, %)**: el
-    panel se lleva el teclado con `focus_force` (necesario para que su caja de precio reciba
-    teclas). Cuando esa ventana muere, Tk se queda **sin ventana con foco**: los
-    `focus_set` que dispara un clic quedan diferidos y **ningún input de la ventana grande
-    acepta teclas** (se percibía como "el campo está deshabilitado"). Se arreglaba solo al
-    abrir y cerrar el buscador porque `SearchPopup.destroy` hace `parent.focus_force()`.
-    Ahora `_Popup.destroy` devuelve el foco con `focus_force` a la ventana antes de pasarlo
-    al chip y los diálogos hacen lo mismo en `dialog.Modal.destroy`
-    (`tests/test_ui_smoke.py::test_el_panel_devuelve_el_teclado_a_la_ventana` y
-    `::test_los_dialogos_tambien_devuelven_el_teclado`).
-    El `grab_set` que tenía el panel era otro problema (se tragaba el primer clic de
-    afuera); los paneles ya no lo usan. Si el síntoma vuelve, mirar `closebar._Popup`,
-    no el `CTkEntry`.
-
-19. **La app se cerraba al abrir el panel del precio**: `_Popup` guardaba
-    `self._root = anchor.winfo_toplevel()` y `self.anchor = ...`, y `_root`/`anchor`/
-    `size` son métodos de tkinter. Al mapear la ventana, tkinter resuelve `%W` con
-    `_nametowidget → w._root()` y encontraba una ventana en vez del método: TypeError,
-    el manejador de errores volvía a fallar y el proceso salía del `mainloop`. Ahora se
-    llaman `_ventana`, `_ancla` y `contract_size`; `tests/test_ui_smoke.py` falla si un
-    widget vuelve a pisar un método de tkinter. Los tests no lo vieron porque usan
-    `update()` y no `mainloop()`: el doble fallo queda como error de Tcl.
-
-20. **`order/cancel` respondía 600 Parameter error**: el body es un **array de ids sueltos**
+11. **`order/cancel` respondía 600 Parameter error**: el body es un **array de ids sueltos**
     (`["871374754337090048"]`), no `{"orderIds": [...]}`; los ids van como texto para no
     perder precisión (18 dígitos). `mexc.cancel()` lo arma así y
     `tests/test_mexc_orders.py` fija el payload. Comprobado contra la cuenta real creando
     una límite a mitad de precio y cancelándola.
-
-21. **La fee de la posición salía congelada y más baja que en MEXC**: la celda mostraba
+12. **La fee de la posición salía congelada y más baja que en MEXC**: la celda mostraba
     `totalFee`, que es **solo la comisión cobrada al abrir**. MEXC suma también el funding
     (`holdFee`, que en su panel va en una línea aparte). Ahora `mexc.fee_desglose()` devuelve
     comisión + funding (`1.4833` con la cuenta real) y la fila pinta ese total con subrayado
-    punteado: al pasar el puntero aparece el desglose (`tooltip.NumeroConDetalle`).
-    Tests: `tests/test_mexc_pure.py::test_la_fee_es_comision_mas_funding` y
-    `test_ui_smoke.py::test_la_fee_suma_comision_y_funding_y_trae_detalle`.
+    punteado: al pasar el puntero aparece el desglose (`cells.py` y el tooltip del delegado).
     Ojo con los números de MEXC: su "Fees" del panel es `totalFee + lowSaveTotalFee` (por eso
     sale más alto) y `lowSaveTotalFee` es el "Fees saved", que **no** suma.
-
-22. **Editar el TP/SL creaba un SL nuevo en vez de reemplazarlo**: el lápiz de la fila se
-    construía con `lambda pos=p:` y se quedaba con el dict de cuando se creó la fila. Ese
-    dict tenía `_tpsl_id = None`, así que la segunda edición no cancelaba nada y
-    `stoporder/place` acumulaba stops. Ahora `table._add_row` pasa `vigente()`, que lee
-    `self.rows[pid]["data"]` al momento del clic (el mismo dict viejo afectaba a cerrar,
-    reverse y al lápiz de margen: `holdVol` desactualizado tras un cierre parcial). Además
-    `_tpsl_worker` cancela **todos** los stop de ese `positionId` (leídos de
-    `stoporder/list/orders`), no un id cacheado: limpia los duplicados que ya existan.
-    Tests: `test_ui_smoke.py::test_el_lapiz_usa_el_dato_vigente_y_no_la_foto_vieja` y
+13. **Editar el TP/SL creaba un SL nuevo en vez de reemplazarlo**: la edición anterior se
+    guardaba contra el id del stop cacheado, y una segunda edición no cancelaba nada: MEXC
+    acumulaba stops. Ahora `Control._tpsl_worker` cancela **todos** los stop de ese
+    `positionId` (leídos de `stoporder/list/orders`), no un id cacheado, y limpia los
+    duplicados que ya existan. Test:
     `test_actions_close.py::test_editar_el_tpsl_cancela_todos_los_stop_de_la_posicion`.
-
-23. **Break-even**: el botón del diálogo TP/SL rellena el SL con
+14. **Break-even**: el botón del diálogo TP/SL rellena el SL con
     `mexc.break_even_price()` = entrada ± (comisión de entrada + funding ya cobrado +
     comisión de salida estimada) / contratos, redondeado **hacia afuera** del precio.
     La salida no se puede saber de antemano (MEXC la cobra al cerrar con la tasa del
@@ -436,9 +373,9 @@ en la cabecera con botón para copiarla.
     entre abrir el diálogo y guardar, `_tpsl_worker` rechaza en vez de que `plan_tp_sl`
     guarde ese SL como TP.
 
-**Cómo diagnosticar un bloqueo de UI:** `perf.log` registra con hora cualquier callback
-de `_drain` que tarde más de 200 ms **y los mensajes que lo causaron**
-(`drain 1645 ms · history,positions`). Si el archivo tiene líneas, ahí está el culpable.
+**Cómo diagnosticar un bloqueo de UI:** `perf.log` sigue siendo el registro histórico de la
+app Tk; en Qt, un modal abierto dentro de `_drenar` volvería a congelar el refresco, así que
+los avisos se encolan fuera del drain (§6).
 
 ---
 
@@ -447,8 +384,8 @@ de `_drain` que tarde más de 200 ms **y los mensajes que lo causaron**
 ```powershell
 python app.py                 # lanzador del acceso directo, con consola para ver errores
 python -m tradedesk           # lo mismo, con PYTHONPATH=src
-python -m pytest              # 70 tests: logica pura, payloads y UI
-python -m pytest -m ui        # solo los de ventana (miden la fila y los popups)
+python -m tradedesk.qt        # abre la vista Qt directamente
+python -m pytest              # ~70 tests: logica pura, payloads y parseo
 python -m ruff check .        # lint
 python -m ruff format --check .   # formato (lo que corre el CI)
 scripts\check.bat             # las tres cosas juntas
@@ -456,8 +393,7 @@ scripts\check.bat             # las tres cosas juntas
 python tools/smoke_api.py     # red real: precio, contrato, USDT -> contratos
 python tools/check_account.py # consulta la cuenta real: saldo, posiciones, historial
 python tools/smoke_live.py 9  # arranca 9 s, pinta posiciones y ordenes, cierra sola
-python tools/medir_repintado.py  # ms que tarda en repintarse al restaurar
-# perf.log registra cualquier callback de la UI que tarde > 200 ms
+python tools/qt_probe.py      # ms de repintado (objetivo <= 60)
 ```
 
 **Qué correr según lo que se tocó** (nada más que eso; la suite completa solo al commitear):
@@ -465,17 +401,20 @@ python tools/medir_repintado.py  # ms que tarda en repintarse al restaurar
 | Se tocó | Correr |
 |---|---|
 | `theme.py` (formato, color, fuente) | `python -m pytest tests/test_theme.py` |
-| `table.py` (fila, celda, cabecera) | `python -m pytest tests/test_ui_smoke.py -k "fila or fee"` o una captura de la fila |
+| `layout.py` (anchos de tabla) | `python -m pytest tests/test_layout.py` |
 | `mexc.py` (payload, `vol`, precio, fee) | `python -m pytest tests/test_mexc_orders.py tests/test_mexc_pure.py` |
-| `orders.py` (tabla/editor de órdenes) | `python -m pytest tests/test_ui_smoke.py -k orden` |
-| `cards.py`, `closebar.py` | `python -m pytest tests/test_ui_smoke.py -k "tarjeta or panel"` |
-| `dialog.py`, `search.py`, `ui.py` | `python -m pytest tests/test_ui_smoke.py tests/test_search.py -k "dialogo or buscador or teclado"` |
-| `app.py`, `actions.py` (hilos, cola, órdenes) | `python -m pytest tests/test_no_threaded_widgets.py tests/test_app_notices.py tests/test_actions_close.py` |
-| `tooltip.py` | nada propio: se mira con una captura del panel |
+| `controller.py` (hilos, cola, cierre, TP/SL, órdenes) | `python -m pytest tests/test_no_threaded_widgets.py tests/test_actions_close.py tests/test_mexc_orders.py` |
+| `session.py` (pollers, config, catálogo) | `python -m pytest tests/test_paths.py` + `python tools/smoke_live.py 9` |
+| `forms.py` (parseo de tarjeta/editor) | `python -m pytest tests/test_forms.py` |
+| `pairs.py`, `qt/search.py` (buscador) | `python -m pytest tests/test_search.py` |
+| `qt/view.py`, `qt/dialogs.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
+| `__main__.py`, `app.py` (arranque) | `python -m pytest tests/test_launcher.py` |
 | docs, comentarios, README | nada |
 
 Si el cambio es de texto, formato o color: **captura** y listo, sin tests. Si dudas de qué
-test cubre algo, preguntar antes de correr la suite entera.
+test cubre algo, preguntar antes de correr la suite entera. Los widgets Qt se verifican con
+captura: los tests no abren ventanas (crear/destruir Qt en la misma corrida de pytest revienta
+en Windows con Python 3.14).
 
 Antes de entregar un cambio:
 
@@ -496,6 +435,21 @@ cerrar todas, DRY-RUN, historial, búsqueda, conversión de tamaño, **abrir una
 en la pestaña Órdenes, cancelarla y modificarla** (crear → listar → cancelar → editar y
 reenviar, todo probado contra la cuenta con órdenes de prueba a mitad de precio).
 
+**Migración a Qt terminada (F1–F6):**
+
+- `python app.py` y el acceso directo abren la **vista Qt**; `python -m tradedesk.qt` hace lo
+  mismo. La app de Tkinter y sus módulos (`app.py` del paquete, `ui.py`, `cards.py`,
+  `closebar.py`, `table.py`, `orders.py`, `search.py`, `dialog.py`, `tooltip.py`, `actions.py`)
+  se borraron; `customtkinter` salió de las dependencias.
+- `session.py` carga config/catálogo, pollers y caches. `controller.py` tiene los casos de uso
+  (abrir, cerrar, cerrar todo, reverse, TP/SL, margen, modificar/cancelar) y `qt/dialogs.py`
+  implementa el `UiPort`. Los payloads y mensajes son los mismos de antes.
+- La vista Qt ya opera: LONG/SHORT, barra de cierre con `Mercado ▾` / `% ▾`, checkboxes +
+  `Cerrar seleccionadas`, `CERRAR TODO`, `Reverse`, lápices de TP/SL y margen, editor de
+  órdenes, `Cancelar todo`, buscador, historial, IP copiable y DRY-RUN siempre encendido.
+- Medido con `tools/qt_probe.py` (8 tarjetas y 200 filas): **~50 ms** al restaurar contra
+  **943 ms** del caso equivalente en Tk.
+
 **Sin probar contra posición real:** `Reverse` y el cierre desde el botón de la fila
 (la ruta existe y la firma está validada, pero no se ejecutó con posición abierta).
 El **cierre parcial** (`vol < holdVol`) y el **cierre límite** (`type=1`) están probados
@@ -505,27 +459,13 @@ cubra comisiones y que nunca quede del lado de la pérdida por el redondeo) y en
 diálogo; falta ponerlo una vez con una posición en ganancia y comprobar que el PnL queda
 en ~0 al ejecutarse.
 
-**Migración a Qt (en curso, F1a-F3 hechas):**
-
-- `python -m tradedesk.qt` abre una vista **de solo lectura** con las tarjetas, las posiciones
-  y las órdenes reales: mismos tokens, anchos de columna y altos de fila que la versión Tk
-  (importa `POS_COLS`/`ORDER_COLS` de `table.py`/`orders.py` para no duplicar medidas).
-- `session.py` es la capa sin UI: config, cola y pollers (tickers round-robin ~1.4 req/s,
-  posiciones y órdenes cada 3 s). Publica `cards`, `ticker`, `positions`, `orders` y `error`.
-  La vista Qt se alimenta de ahí; la app Tk todavía tiene su propio poller en `app.py`.
-- Las acciones (LONG/SHORT, cerrar, reverse, modificar/cancelar, lápices) **no están
-  conectadas**: avisan en la barra de estado. La app de Tkinter sigue siendo la que opera y
-  el acceso directo del escritorio abre esa (el cambio es en F6).
-- Medido con `tools/qt_probe.py` (8 tarjetas y 200 filas): **~50 ms** al restaurar contra
-  **943 ms** del caso equivalente en Tk.
-- Falta: F4 (diálogos, buscador, avisos), F5 (cablear acciones y tests) y F6 (el lanzador abre
-  Qt y se borra la vista Tk). Los tests siguen siendo de la app Tk: la vista Qt no tiene tests
-  todavía.
+**F7 (opcional, no empezada):** gráficos de velas con TP/SL arrastrables (`pyqtgraph`).
 
 **Pendiente / ideas descartadas por ahora:**
 
 - Guardar más de un TP parcial por posición (MEXC admite un TP y un SL por stop order).
 - Saldo disponible en la cabecera (`mx.assets()` ya existe, falta pintarlo).
+- Cambiar el par de una tarjeta sin quitarla y volver a añadirla.
 - Otros exchanges: **Bitunix** y **BingX** (documentados en la conversación de origen).
   Bitunix: firma SHA256 doble, TP/SL en la misma orden, sin close-all.
   BingX: v1 y v2 conviven, TP/SL requiere `positionId` (dos pasos).

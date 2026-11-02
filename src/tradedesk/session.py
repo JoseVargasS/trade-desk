@@ -15,11 +15,14 @@ import queue
 import threading
 import time
 
+import httpx
+
 from . import creds, paths
 from .mexc import Mexc, decorate_orders, decorate_positions, display_name
 
 TICKER_SEG = 0.70  # una peticion cada 0.7 s en total (~1.4 req/s, el limite medido)
 POSICIONES_SEG = 3.0
+HISTORIAL_SEG = 15.0
 
 
 class Session:
@@ -31,8 +34,69 @@ class Session:
         self.mercados = {}
         self.ultimas_posiciones = []
         self.ultimas_ordenes = []
+        self.ver_historial = False
         self._parar = threading.Event()
         self._hilos = []
+
+    # --------------------------------------------------------------- tarjetas
+    def add_card(self, symbol):
+        if any(t["symbol"] == symbol for t in self.tarjetas):
+            return False
+        self.tarjetas.append(
+            {"symbol": symbol, "leverage": "10", "margin": "Aislado", "size_mode": "Margen"}
+        )
+        self._guardar_config()
+        threading.Thread(target=self._publicar, daemon=True).start()
+        return True
+
+    def remove_card(self, symbol):
+        self.tarjetas = [t for t in self.tarjetas if t["symbol"] != symbol]
+        self._guardar_config()
+        threading.Thread(target=self._publicar, daemon=True).start()
+
+    def _guardar_config(self):
+        try:
+            (paths.DATA_DIR / "config.json").write_text(
+                json.dumps({"cards": self.tarjetas}, indent=2), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    def _publicar(self):
+        """Contrato y precio de cada tarjeta; solo publica, no toca widgets."""
+        lista = []
+        for tarjeta in self.tarjetas:
+            contrato = self.contract_for(tarjeta["symbol"])
+            if not contrato:
+                try:
+                    contrato = self.mx.contract(tarjeta["symbol"]) or {}
+                except Exception as exc:
+                    self.q.put(("error", f"contrato {tarjeta['symbol']}: {exc}"))
+            precio = float(self.precios.get(tarjeta["symbol"]) or 0)
+            if not precio:
+                try:
+                    precio = float(self.mx.price(tarjeta["symbol"]) or 0)
+                except Exception as exc:
+                    self.q.put(("error", f"precio {tarjeta['symbol']}: {exc}"))
+            if precio:
+                self.precios[tarjeta["symbol"]] = precio
+            lista.append(
+                {
+                    **tarjeta,
+                    "precio": precio,
+                    "contrato": contrato,
+                    "nombre": display_name(contrato)
+                    if contrato
+                    else tarjeta["symbol"].replace("_", ""),
+                }
+            )
+        self.q.put(("cards", lista))
+
+    def cargar_historial(self):
+        try:
+            self.q.put(("history", self.mx.history(50)))
+        except Exception as exc:
+            self.q.put(("status", f"historial: {exc}"))
 
     # ------------------------------------------------------------- consultas
     def contract_for(self, symbol):
@@ -84,7 +148,12 @@ class Session:
 
     # ------------------------------------------------------------------- ciclo
     def start(self):
-        for objetivo in (self._cargar_tarjetas, self._cargar_catalogo, self._poll):
+        for objetivo in (
+            self._cargar_tarjetas,
+            self._cargar_catalogo,
+            self._cargar_ip,
+            self._poll,
+        ):
             hilo = threading.Thread(target=objetivo, daemon=True)
             hilo.start()
             self._hilos.append(hilo)
@@ -96,31 +165,14 @@ class Session:
     # ------------------------------------------------------------------ hilos
     def _cargar_tarjetas(self):
         """Contrato y primer precio de cada tarjeta: esto si pide red, va en su hilo."""
-        lista = []
-        for tarjeta in self.tarjetas:
-            contrato = {}
-            try:
-                contrato = self.mx.contract(tarjeta["symbol"]) or {}
-            except Exception as exc:
-                self.q.put(("error", f"contrato {tarjeta['symbol']}: {exc}"))
-            precio = 0.0
-            try:
-                precio = float(self.mx.price(tarjeta["symbol"]) or 0)
-            except Exception as exc:
-                self.q.put(("error", f"precio {tarjeta['symbol']}: {exc}"))
-            if precio:
-                self.precios[tarjeta["symbol"]] = precio
-            lista.append(
-                {
-                    **tarjeta,
-                    "precio": precio,
-                    "contrato": contrato,
-                    "nombre": display_name(contrato)
-                    if contrato
-                    else tarjeta["symbol"].replace("_", ""),
-                }
-            )
-        self.q.put(("cards", lista))
+        self._publicar()
+
+    def _cargar_ip(self):
+        try:
+            ip = httpx.get("https://api.ipify.org", timeout=5).text.strip()
+        except Exception:
+            ip = "desconocida"
+        self.q.put(("ip", ip))
 
     def _cargar_catalogo(self):
         """Catálogo completo (1.171 pares) para el buscador y `contract_for`."""
@@ -133,6 +185,7 @@ class Session:
     def _poll(self):
         indice = 0
         proximo = 0.0
+        proximo_hist = 0.0
         while not self._parar.is_set():
             if self.tarjetas:
                 symbol = self.tarjetas[indice % len(self.tarjetas)]["symbol"]
@@ -159,4 +212,7 @@ class Session:
                     self.q.put(("orders", ordenes))
                 except Exception as exc:
                     self.q.put(("error", f"órdenes: {exc}"))
+            if self.ver_historial and ahora >= proximo_hist:
+                proximo_hist = ahora + HISTORIAL_SEG
+                self.cargar_historial()
             time.sleep(TICKER_SEG)

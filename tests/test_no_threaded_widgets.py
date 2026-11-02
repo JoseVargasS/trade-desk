@@ -1,4 +1,4 @@
-"""Regla de oro de Tkinter: ningun hilo de trabajo toca widgets.
+"""Regla de oro: ningun hilo de trabajo toca widgets (ni Tk ni Qt).
 
 Un `configure`/`set_*` desde un worker deja la ventana sorda varios segundos.
 Este test lee el codigo fuente y falla si aparece una llamada asi.
@@ -10,7 +10,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src" / "tradedesk"
 
 WIDGET_CALL = re.compile(
-    r"\b(card|self\.(?:lbl_|btn_|table|tree))\w*"
+    r"\b(card|self\.(?:lbl_|btn_|table|tree|port))\w*"
     r"\.(configure|set_\w+|insert|delete|config)\("
 )
 
@@ -28,9 +28,14 @@ def _workers(path):
             yield number, current, line
 
 
+def _archivos():
+    yield SRC / "controller.py"
+    yield from sorted((SRC / "qt").glob("*.py"))
+
+
 def test_los_workers_no_tocan_widgets():
-    for name in ("app.py", "actions.py"):
-        for number, worker, line in _workers(SRC / name):
+    for path in _archivos():
+        for number, worker, line in _workers(path):
             assert not WIDGET_CALL.search(line), (
-                f"{name}:{number} {worker} toca widgets desde un hilo: {line.strip()}"
+                f"{path.name}:{number} {worker} toca widgets desde un hilo: {line.strip()}"
             )

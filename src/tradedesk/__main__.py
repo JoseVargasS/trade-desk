@@ -1,11 +1,7 @@
-"""Arranque de la app: `python -m tradedesk`."""
+"""Arranque de la app: `python -m tradedesk` abre la vista Qt."""
 
 import ctypes
 import os
-
-import customtkinter as ctk
-
-from .app import App
 
 
 def main():
@@ -15,11 +11,10 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("tradedesk.mexc.v1")
         except Exception:
             pass
-    ctk.set_appearance_mode("dark")
-    root = ctk.CTk()
-    App(root)
-    root.mainloop()
+    from .qt.__main__ import main as qt_main
+
+    return qt_main()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
