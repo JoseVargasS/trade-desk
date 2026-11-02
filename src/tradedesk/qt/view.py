@@ -14,10 +14,10 @@ from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLineEdit,
     QMainWindow,
     QMenu,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme as t
+from ..controller import Control
 from ..mexc import fee_desglose
 from ..orders import ACTION_W as ORDER_ACTION_W
 from ..orders import ORDER_COLS
@@ -40,6 +41,7 @@ from ..session import Session
 from ..table import ACTION_W, PENCIL_COLS, POS_COLS, ROW_H, STATES
 from . import dialogs
 from .cells import DelegadoCeldas, icono_lapiz, lineas
+from .dialogs import QtPort
 from .style import Segmentado, qss
 from .style import boton as _boton
 from .style import etiqueta as _etiqueta
@@ -78,8 +80,13 @@ def _tabla(columnas, alto_fila):
 class BarraCierre(QWidget):
     """Los cuatro controles de la fila: Mercado · % · Cerrar · Reverse."""
 
-    def __init__(self, position, pnl, largo, avisar):
+    def __init__(self, position, pnl, largo, al_cerrar, al_reverse):
         super().__init__()
+        self.position = position
+        self.al_cerrar = al_cerrar
+        self.al_reverse = al_reverse
+        self.pct = 100
+        self.precio = 0.0
         self.setFixedSize(190, 52)
         fila1 = QHBoxLayout()
         fila1.setSpacing(4)
@@ -87,31 +94,82 @@ class BarraCierre(QWidget):
         fila2.setSpacing(4)
         color = t.GREEN if pnl > 0 else (t.RED if pnl < 0 else t.INPUT)
         texto_color = t.BG if pnl else t.TEXT
-        cerrar = f"Cerrar {'LONG' if largo else 'SHORT'}"
-        controles = (
-            ("Mercado", 106, 22, None, None, fila1),
-            ("100%", 78, 22, None, None, fila1),
-            (cerrar, 102, 26, color, texto_color, fila2),
-            ("Reverse", 82, 26, None, None, fila2),
-        )
-        for texto, ancho, alto, fondo, letra, fila in controles:
-            boton = _boton(texto, ancho, alto, fondo, letra)
-            boton.clicked.connect(lambda _=False, que=texto: avisar(que))
-            fila.addWidget(boton)
+        self.btn_tipo = _boton("Mercado ▾", 106, 22)
+        self.btn_tipo.clicked.connect(self._menu_tipo)
+        fila1.addWidget(self.btn_tipo)
+        self.btn_pct = _boton("100% ▾", 78, 22)
+        self.btn_pct.clicked.connect(self._pedir_pct)
+        fila1.addWidget(self.btn_pct)
+        cerrar = _boton(f"Cerrar {'LONG' if largo else 'SHORT'}", 102, 26, color, texto_color)
+        cerrar.clicked.connect(self._cerrar)
+        fila2.addWidget(cerrar)
+        reverse = _boton("Reverse", 82, 26)
+        reverse.clicked.connect(lambda: self.al_reverse(self.position))
+        fila2.addWidget(reverse)
         columna = QVBoxLayout(self)
         columna.setContentsMargins(0, 0, 0, 0)
         columna.setSpacing(4)
         columna.addLayout(fila1)
         columna.addLayout(fila2)
 
+    def _menu_tipo(self):
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {t.CARD}; color: {t.TEXT}; border: 1px solid {t.BORDER}; }}"
+            f"QMenu::item:selected {{ background: {t.SURFACE}; }}"
+        )
+        mercado = menu.addAction("Mercado")
+        limite = menu.addAction("Límite…")
+        elegido = menu.exec(self.btn_tipo.mapToGlobal(self.btn_tipo.rect().bottomLeft()))
+        if elegido is mercado:
+            self.precio = 0.0
+            self.btn_tipo.setText("Mercado ▾")
+        elif elegido is limite:
+            res = dialogs.form(
+                self.window(),
+                "Cerrar a límite",
+                [("precio", "Precio", "")],
+                nota="Una orden límite puede quedar sin llenar.",
+            )
+            if res is None:
+                return
+            try:
+                precio = float(res["precio"].replace(",", ""))
+            except ValueError:
+                return
+            if precio > 0:
+                self.precio = precio
+                self.btn_tipo.setText(f"{precio:,.2f} ▾")
+
+    def _pedir_pct(self):
+        res = dialogs.form(
+            self.window(),
+            "Cerrar una parte",
+            [("pct", "Porcentaje", "100")],
+            nota="Se redondea al contrato entero; 100% cierra todo.",
+        )
+        if res is None:
+            return
+        try:
+            pct = float(res["pct"].replace(",", ""))
+        except ValueError:
+            return
+        if 0 < pct <= 100:
+            self.pct = pct
+            self.btn_pct.setText(f"{pct:.0f}% ▾")
+
+    def _cerrar(self):
+        self.al_cerrar(self.position, {"pct": self.pct, "price": self.precio or None})
+
 
 class Tarjeta(QFrame):
     """Una tarjeta de par: apalancamiento, tamaño, TP/SL y el resumen vivo."""
 
-    def __init__(self, tarjeta, mx):
+    def __init__(self, tarjeta, mx, on_trade=None):
         super().__init__()
         self.tarjeta = tarjeta
         self.mx = mx
+        self.on_trade = on_trade or (lambda _c, _s: None)
         self.limite = 0.0
         self.setObjectName("card")
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -177,8 +235,8 @@ class Tarjeta(QFrame):
         fila_botones.setSpacing(8)
         self.btn_long = _boton("LONG", None, 38, t.GREEN, t.BG, t.R_CTRL, 14)
         self.btn_short = _boton("SHORT", None, 38, t.RED, t.BG, t.R_CTRL, 14)
-        self.btn_long.setEnabled(False)
-        self.btn_short.setEnabled(False)
+        self.btn_long.clicked.connect(lambda: self.on_trade(self, "LONG"))
+        self.btn_short.clicked.connect(lambda: self.on_trade(self, "SHORT"))
         fila_botones.addWidget(self.btn_long)
         fila_botones.addWidget(self.btn_short)
         columna.addLayout(fila_botones)
@@ -196,6 +254,40 @@ class Tarjeta(QFrame):
 
     def _poner_palanca(self, valor):
         self.in_palanca.setText(str(valor))
+
+    def form(self):
+        """Valores ya parseados, o None si algo no es número."""
+        try:
+            palanca = int(float(self.in_palanca.text().replace(",", "") or 0))
+            tamano = float(self.in_tamano.text().replace(",", ""))
+        except ValueError:
+            return None
+        if palanca < 1 or tamano <= 0:
+            return None
+        tp, sl = self.in_tp.text().strip(), self.in_sl.text().strip()
+        for valor in (tp, sl):
+            if valor:
+                try:
+                    float(valor.replace(",", ""))
+                except ValueError:
+                    return None
+        nocional = tamano * palanca if self.tarjeta["size_mode"] == "Margen" else tamano
+        return {
+            "symbol": self.tarjeta["symbol"],
+            "lev": palanca,
+            "size": tamano,
+            "notional": nocional,
+            "tp": float(tp.replace(",", "")) if tp else None,
+            "sl": float(sl.replace(",", "")) if sl else None,
+            "open_type": 1 if self.tarjeta["margin"] == "Aislado" else 2,
+            "margin_mode": self.tarjeta["margin"],
+            "size_mode": self.tarjeta["size_mode"],
+            "price": self.limite or None,
+        }
+
+    def set_busy(self, activo):
+        self.btn_long.setEnabled(not activo)
+        self.btn_short.setEnabled(not activo)
 
     def set_precio(self, precio):
         """Precio nuevo del ticker: se actualiza sin pedir nada a la red."""
@@ -215,12 +307,20 @@ class Tarjeta(QFrame):
             self.limite = 0.0
             self.chip_limite.setText("Mercado ▾")
         elif elegido is limite:
-            precio, aceptado = QInputDialog.getDouble(
-                self, "Precio límite", "Precio:", float(self.tarjeta["precio"] or 0), 0, 1e12, 6
+            res = dialogs.form(
+                self,
+                "Precio límite",
+                [("precio", "Precio", f"{float(self.tarjeta['precio'] or 0):.6f}".rstrip("0"))],
+                nota="La orden sale a límite: puede quedar sin llenar.",
             )
-            if aceptado and precio > 0:
-                self.limite = float(precio)
-                self.chip_limite.setText(f"{self.limite:,.2f} ▾")
+            if res and res["precio"]:
+                try:
+                    precio = float(res["precio"].replace(",", ""))
+                except ValueError:
+                    precio = 0.0
+                if precio > 0:
+                    self.limite = precio
+                    self.chip_limite.setText(f"{precio:,.2f} ▾")
         self.chip_limite.adjustSize()
         self._actualizar()
 
@@ -256,12 +356,18 @@ class Tarjeta(QFrame):
 class VistaQt(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Trade Desk · vista Qt (solo lectura)")
+        self.setWindowTitle("Trade Desk")
         self.resize(1800, 1000)
         self._posiciones = []
+        self._ordenes = []
         self._tarjetas = {}
+        self._tarjeta_enviando = None
         self._avisos = []
         self._mostrando = False
+        self._dry = True
+
+        self.session = Session()
+        self.control = Control(self.session, QtPort(self), dry=lambda: self._dry)
 
         central = QWidget()
         central.setObjectName("central")
@@ -273,13 +379,13 @@ class VistaQt(QMainWindow):
         raiz.addWidget(self._armar_pestanas(), 1)
 
         self.setCentralWidget(central)
-        self.statusBar().showMessage("vista previa · solo lectura · las acciones se conectan en F5")
+        self.statusBar().showMessage("DRY-RUN activo · no abre ni cierra posiciones")
         self.setStyleSheet(qss())
 
         self._latido = QTimer(self)
         self._latido.timeout.connect(self._drenar)
         self._latido.start(120)
-        self.session = Session().start()
+        self.session.start()
 
     def closeEvent(self, evento):
         self.session.stop()
@@ -296,8 +402,23 @@ class VistaQt(QMainWindow):
         fila.addSpacing(16)
         fila.addWidget(_etiqueta("Qt · vista previa", 11, muted=True))
         fila.addStretch(1)
-        fila.addWidget(_etiqueta("DRY-RUN", 11, True, color=t.GOLD))
+        self.chk_dry = QCheckBox("DRY-RUN")
+        self.chk_dry.setChecked(True)
+        self.chk_dry.setCursor(Qt.PointingHandCursor)
+        self.chk_dry.setStyleSheet(f"QCheckBox {{ color: {t.GOLD}; }}")
+        self.chk_dry.toggled.connect(self._cambio_dry)
+        fila.addWidget(self.chk_dry)
         return cabecera
+
+    def _cambio_dry(self, activo):
+        self._dry = bool(activo)
+        self.chk_dry.setText("DRY-RUN" if self._dry else "REAL")
+        self.chk_dry.setStyleSheet(f"QCheckBox {{ color: {t.GOLD if self._dry else t.RED}; }}")
+        self.statusBar().showMessage(
+            "DRY-RUN activo · no abre ni cierra posiciones"
+            if self._dry
+            else "REAL · las órdenes se envían"
+        )
 
     def _armar_deck(self):
         deck = QScrollArea()
@@ -334,7 +455,7 @@ class VistaQt(QMainWindow):
         barra.addWidget(self._lbl_ordenes)
         barra.addStretch(1)
         self._btn_cancelar_todo = _boton("Cancelar todo", 120, 26, t.DANGER_SOFT, t.RED)
-        self._btn_cancelar_todo.clicked.connect(lambda: self._avisar("Cancelar todo"))
+        self._btn_cancelar_todo.clicked.connect(lambda: self.control.cancelar_todo(self._ordenes))
         barra.addWidget(self._btn_cancelar_todo)
         col_ord.addLayout(barra)
         self._tabla_ord = self._tabla_ordenes()
@@ -382,7 +503,14 @@ class VistaQt(QMainWindow):
                 self._posiciones = mensaje[1]
                 self._pintar_posiciones(self._posiciones)
             elif tipo == "orders":
-                self._pintar_ordenes(mensaje[1])
+                self._ordenes = mensaje[1]
+                self._pintar_ordenes(self._ordenes)
+            elif tipo in ("status", "closed"):
+                self.statusBar().showMessage(mensaje[1])
+            elif tipo == "notice":
+                self._notificar(*mensaje[1])
+            elif tipo == "order":
+                self._orden_terminada(*mensaje[1])
         # un modal dentro de _drenar congela el refresco: se abre al volver al bucle
         QTimer.singleShot(0, self._siguiente_aviso)
 
@@ -401,16 +529,33 @@ class VistaQt(QMainWindow):
             self._mostrando = False
         QTimer.singleShot(0, self._siguiente_aviso)
 
-    def _avisar(self, que):
-        self.statusBar().showMessage(f"{que}: se conecta en F5 (esta vista no envía órdenes)")
+    def _orden_terminada(self, ok, msg):
+        if self._tarjeta_enviando is not None:
+            self._tarjeta_enviando.set_busy(False)
+        self._tarjeta_enviando = None
+
+    def _trade(self, tarjeta, side):
+        form = tarjeta.form()
+        if not form:
+            dialogs.show(
+                self,
+                "Datos invalidos",
+                "Revisa el apalancamiento y el tamaño: deben ser numeros "
+                "positivos, y TP/SL vacios o numericos.",
+            )
+            return
+
+        def enviar():
+            self._tarjeta_enviando = tarjeta
+            tarjeta.set_busy(True)
+
+        self.control.abrir(side, form, al_enviar=enviar)
 
     def _actualizar_precio(self, symbol, precio):
         tarjeta = self._tarjetas.get(symbol)
         if tarjeta is not None:
             tarjeta.set_precio(precio)
-        self.statusBar().showMessage(
-            f"{len(self._posiciones)} posiciones · solo lectura · las acciones se conectan en F5"
-        )
+        self.statusBar().showMessage(f"{len(self._posiciones)} posiciones abiertas")
 
     def _pintar_deck(self, tarjetas):
         while self._fila_tarjetas.count() > 1:
@@ -419,7 +564,7 @@ class VistaQt(QMainWindow):
                 elemento.widget().deleteLater()
         self._tarjetas = {}
         for tarjeta in tarjetas:
-            widget = Tarjeta(tarjeta, self.session.mx)
+            widget = Tarjeta(tarjeta, self.session.mx, on_trade=self._trade)
             self._tarjetas[tarjeta["symbol"]] = widget
             self._fila_tarjetas.insertWidget(self._fila_tarjetas.count() - 1, widget)
 
@@ -523,17 +668,26 @@ class VistaQt(QMainWindow):
                 item.setTextAlignment(Qt.AlignRight if anclaje == "e" else Qt.AlignLeft)
                 if clave in PENCIL_COLS:
                     # la celda lleva widget (valor + lapiz): el delegado no pinta nada
+                    accion = (
+                        (lambda p=position: self.control.tpsl(p))
+                        if clave == "tpsl"
+                        else (lambda p=position: self.control.margen(p))
+                    )
                     tabla.setCellWidget(
                         fila,
                         columna,
-                        self._celda_lapiz(clave, valores[clave], position, fondo_fila),
+                        self._celda_lapiz(clave, valores[clave], accion, fondo_fila),
                     )
                 else:
                     item.setData(Qt.UserRole, valores[clave])
                 tabla.setItem(fila, columna, item)
 
             acciones = len(POS_COLS) + 2
-            tabla.setCellWidget(fila, acciones, BarraCierre(position, pnl, largo, self._avisar))
+            tabla.setCellWidget(
+                fila,
+                acciones,
+                BarraCierre(position, pnl, largo, self.control.cerrar, self.control.reverse),
+            )
         self._lbl_abiertas.setText(f"{len(posiciones)} abiertas")
 
     def _texto_stops(self, position, escala):
@@ -550,7 +704,7 @@ class VistaQt(QMainWindow):
             return ((f"SL {t.fmt_price_exact(sl, escala)}", 13, True, t.RED),)
         return (("—", 13, False, t.MUTED),)
 
-    def _celda_lapiz(self, clave, partes, position, fondo=None):
+    def _celda_lapiz(self, clave, partes, accion, fondo=None):
         caja = QWidget()
         if fondo:
             caja.setStyleSheet(f"background: {fondo};")
@@ -566,7 +720,7 @@ class VistaQt(QMainWindow):
         lapiz.setIconSize(QSize(14, 14))
         lapiz.setCursor(Qt.PointingHandCursor)
         lapiz.setStyleSheet("QToolButton { border: 0; background: transparent; }")
-        lapiz.clicked.connect(lambda: self._avisar(f"editar {clave}"))
+        lapiz.clicked.connect(lambda _=False: accion())
         fila.addWidget(lapiz, 0)
         return caja
 
@@ -641,7 +795,9 @@ class VistaQt(QMainWindow):
                         fila,
                         columna,
                         self._celda_lapiz(
-                            clave, valores.get(clave, lineas(("—", 13, False, t.MUTED))), orden
+                            clave,
+                            valores.get(clave, lineas(("—", 13, False, t.MUTED))),
+                            lambda o=orden: self.control.modificar(o),
                         ),
                     )
 
@@ -651,8 +807,8 @@ class VistaQt(QMainWindow):
             fila_acciones.setSpacing(6)
             modificar = _boton("Modificar", 84, 26)
             cancelar = _boton("Cancelar", 84, 26, t.INPUT, t.RED)
-            modificar.clicked.connect(lambda: self._avisar("Modificar"))
-            cancelar.clicked.connect(lambda: self._avisar("Cancelar"))
+            modificar.clicked.connect(lambda _=False, o=orden: self.control.modificar(o))
+            cancelar.clicked.connect(lambda _=False, o=orden: self.control.cancelar(o))
             fila_acciones.addWidget(modificar)
             fila_acciones.addWidget(cancelar)
             tabla.setCellWidget(fila, len(ORDER_COLS), acciones)

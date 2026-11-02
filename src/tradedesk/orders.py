@@ -18,7 +18,7 @@ import customtkinter as ctk
 
 from . import theme as t
 from .dialog import Modal
-from .mexc import margen_inicial, num_texto
+from .mexc import es_editable, margen_inicial, num_texto
 from .table import STATES, Header, Pencil, sync_header_pad
 
 ORDER_COLS = (
@@ -60,11 +60,6 @@ def direccion(order):
     """(texto, color) de la dirección: 1 y 2 compran, 3 y 4 venden."""
     texto, compra = DIRS.get(int(order.get("side") or 0), ("?", True))
     return texto, t.GREEN if compra else t.RED
-
-
-def es_editable(order):
-    """Solo las órdenes que abren posición se pueden reenviar tal cual."""
-    return int(order.get("side") or 0) in (1, 3)
 
 
 class OpenOrdersTable(ctk.CTkFrame):

@@ -187,6 +187,11 @@ def break_even_price(position, long_):
     return be, coins * (entry - be)
 
 
+def es_editable(order):
+    """Solo las órdenes que abren posición se pueden reenviar tal cual."""
+    return int(order.get("side") or 0) in (1, 3)
+
+
 def num_texto(valor):
     """Número para un campo de texto, sin ceros de relleno ni comas de miles."""
     try:

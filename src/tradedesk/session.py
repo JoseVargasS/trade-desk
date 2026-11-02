@@ -28,8 +28,37 @@ class Session:
         self.q = queue.Queue()
         self.tarjetas = self._tarjetas()
         self.precios = {}
+        self.mercados = {}
+        self.ultimas_posiciones = []
+        self.ultimas_ordenes = []
         self._parar = threading.Event()
         self._hilos = []
+
+    # ------------------------------------------------------------- consultas
+    def contract_for(self, symbol):
+        """Contrato del par: catálogo o cache. Sin red."""
+        return self.mercados.get(symbol) or self.mx.cached_contract(symbol) or {}
+
+    def log(self, msg):
+        from datetime import datetime
+
+        try:
+            with open(str(paths.DATA_DIR / "trades.log"), "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}\n")
+        except Exception:
+            pass
+
+    def refresh_positions(self):
+        try:
+            self.q.put(("positions", decorate_positions(self.mx, self.mx.positions())))
+        except Exception as exc:
+            self.q.put(("status", f"posiciones: {exc}"))
+
+    def refresh_orders(self):
+        try:
+            self.q.put(("orders", decorate_orders(self.mx, self.mx.open_orders())))
+        except Exception as exc:
+            self.q.put(("status", f"ordenes: {exc}"))
 
     # ------------------------------------------------------------------ config
     @staticmethod
@@ -55,7 +84,7 @@ class Session:
 
     # ------------------------------------------------------------------- ciclo
     def start(self):
-        for objetivo in (self._cargar_tarjetas, self._poll):
+        for objetivo in (self._cargar_tarjetas, self._cargar_catalogo, self._poll):
             hilo = threading.Thread(target=objetivo, daemon=True)
             hilo.start()
             self._hilos.append(hilo)
@@ -93,6 +122,14 @@ class Session:
             )
         self.q.put(("cards", lista))
 
+    def _cargar_catalogo(self):
+        """Catálogo completo (1.171 pares) para el buscador y `contract_for`."""
+        try:
+            self.mercados = self.mx.markets()
+            self.q.put(("markets", self.mercados))
+        except Exception as exc:
+            self.q.put(("error", f"catalogo: {exc}"))
+
     def _poll(self):
         indice = 0
         proximo = 0.0
@@ -111,11 +148,15 @@ class Session:
             if ahora >= proximo:
                 proximo = ahora + POSICIONES_SEG
                 try:
-                    self.q.put(("positions", decorate_positions(self.mx, self.mx.positions())))
+                    posiciones = decorate_positions(self.mx, self.mx.positions())
+                    self.ultimas_posiciones = posiciones
+                    self.q.put(("positions", posiciones))
                 except Exception as exc:
                     self.q.put(("error", f"posiciones: {exc}"))
                 try:
-                    self.q.put(("orders", decorate_orders(self.mx, self.mx.open_orders())))
+                    ordenes = decorate_orders(self.mx, self.mx.open_orders())
+                    self.ultimas_ordenes = ordenes
+                    self.q.put(("orders", ordenes))
                 except Exception as exc:
                     self.q.put(("error", f"órdenes: {exc}"))
             time.sleep(TICKER_SEG)

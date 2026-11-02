@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from tradedesk import actions
+from tradedesk import controller
 
 
 class InlineThread:
@@ -18,37 +18,65 @@ class InlineThread:
         self.target(*self.args, **self.kwargs)
 
 
-class FakeApp(actions.ActionsMixin):
-    def __init__(self, mx, dry=False):
-        self.var_dry = types.SimpleNamespace(get=lambda: dry)
+class FakeSession:
+    def __init__(self, mx):
         self.mx = mx
         self.q = queue.Queue()
-        self.root = None
-        self.status = []
+        self.precios = {}
+        self.avisos = []
 
-    def _status(self, msg):
-        self.status.append(msg)
-
-    def _log(self, msg):
+    def log(self, msg):
         pass
 
-    def _refresh_positions(self):
+    def refresh_positions(self):
         pass
+
+    def refresh_orders(self):
+        pass
+
+    def contract_for(self, symbol):
+        return {}
+
+
+class FakePort:
+    def __init__(self, confirmar=True):
+        self.confirmar = confirmar
+        self.avisos = []
+        self.mensajes = []
+
+    def confirm(self, *a, **k):
+        return self.confirmar
+
+    def show(self, titulo, mensaje, **k):
+        self.avisos.append(mensaje)
+
+    def form(self, *a, **k):
+        return None
+
+    def tpsl(self, pos, precio):
+        return None
+
+    def editar_orden(self, orden, contrato, a_vol):
+        return None
+
+    def status(self, texto):
+        self.mensajes.append(texto)
+
+
+def _control(mx, dry=False):
+    return controller.Control(FakeSession(mx), FakePort(), dry=lambda: dry)
 
 
 @pytest.fixture
 def app(mx, monkeypatch):
-    monkeypatch.setattr(actions, "threading", types.SimpleNamespace(Thread=InlineThread))
-    monkeypatch.setattr(actions.dialog, "confirm", lambda *a, **k: True)
-    avisos = []
-    monkeypatch.setattr(actions.dialog, "show", lambda parent, title, msg, **k: avisos.append(msg))
-    fake = FakeApp(mx)
-    fake.avisos = avisos
-    return fake
+    monkeypatch.setattr(controller, "threading", types.SimpleNamespace(Thread=InlineThread))
+    ctl = _control(mx)
+    ctl.port.avisos = []
+    return ctl
 
 
 def test_sin_tocar_nada_cierra_todo_a_mercado(app, posicion):
-    app._close_position(posicion)
+    app.cerrar(posicion)
 
     payload = app.mx.sent[-1][1]
     assert payload["vol"] == 22.0
@@ -56,13 +84,13 @@ def test_sin_tocar_nada_cierra_todo_a_mercado(app, posicion):
 
 
 def test_porcentaje_cierra_una_parte(app, posicion):
-    app._close_position(posicion, {"pct": 50})
+    app.cerrar(posicion, {"pct": 50})
 
     assert app.mx.sent[-1][1]["vol"] == 11.0
 
 
 def test_precio_lo_manda_como_limite(app, posicion):
-    app._close_position(posicion, {"pct": 100, "price": 2246.394})
+    app.cerrar(posicion, {"pct": 100, "price": 2246.394})
 
     payload = app.mx.sent[-1][1]
     assert payload["type"] == 1
@@ -70,25 +98,30 @@ def test_precio_lo_manda_como_limite(app, posicion):
 
 
 def test_porcentaje_que_deja_cero_contratos_no_envia_nada(app, posicion):
-    app._close_position(dict(posicion, holdVol=3), {"pct": 10})
+    app.cerrar(dict(posicion, holdVol=3), {"pct": 10})
 
     assert app.mx.sent == []
-    assert "0 contratos" in app.avisos[-1]
+    assert "0 contratos" in app.port.avisos[-1]
 
 
-def test_dry_run_bloquea(app, posicion):
-    app.var_dry = types.SimpleNamespace(get=lambda: True)
-    app._close_position(posicion)
+def test_dry_run_bloquea(mx, posicion, monkeypatch):
+    monkeypatch.setattr(controller, "threading", types.SimpleNamespace(Thread=InlineThread))
+    ctl = _control(mx, dry=True)
 
-    assert app.mx.sent == []
-    assert app.status and "DRY-RUN" in app.status[-1]
+    ctl.cerrar(posicion)
+
+    assert ctl.mx.sent == []
+    assert ctl.port.mensajes and "DRY-RUN" in ctl.port.mensajes[-1]
 
 
-def test_cancelar_la_confirmacion_no_envia(app, posicion, monkeypatch):
-    monkeypatch.setattr(actions.dialog, "confirm", lambda *a, **k: False)
-    app._close_position(posicion)
+def test_cancelar_la_confirmacion_no_envia(mx, posicion, monkeypatch):
+    monkeypatch.setattr(controller, "threading", types.SimpleNamespace(Thread=InlineThread))
+    ctl = _control(mx)
+    ctl.port.confirmar = False
 
-    assert app.mx.sent == []
+    ctl.cerrar(posicion)
+
+    assert ctl.mx.sent == []
 
 
 def test_editar_el_tpsl_cancela_todos_los_stop_de_la_posicion(app, posicion):

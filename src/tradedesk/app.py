@@ -433,93 +433,18 @@ class App(ActionsMixin):
                 "positivos, y TP/SL vacios o numericos.",
             )
             return
-        price = form.get("price")
-        px = price or self._prices.get(form["symbol"], 0)
-        exact = t.fmt_price_exact(px, self._scale_for(form["symbol"]))
-        dry = bool(self.var_dry.get())
-        rows = [
-            ("Par", form["symbol"]),
-            ("Tipo", f"Límite {exact}" if price else "Mercado"),
-            ("Precio", exact if price else t.fmt_price(px)),
-            ("Tamaño", f"{form['size']:,.2f} USDT ({form['size_mode']})"),
-            ("Nocional", f"{form['notional']:,.2f} USDT"),
-            ("Apalancamiento", f"{form['lev']}x ({form['margin_mode']})"),
-            ("TP / SL", f"{form['tp'] or '—'} / {form['sl'] or '—'}"),
-        ]
-        warn = "DRY-RUN: no se enviara nada." if dry else "ESTO ES REAL"
-        if price:
-            warn += "\nOrden límite: puede quedar sin llenar."
-        if not dialog.confirm(
-            self.root,
-            f"Confirmar {side}",
-            rows=rows,
-            warn=warn,
-            danger=not dry,
-            ok_text=side,
-        ):
-            return
-        card.set_busy(True)
-        threading.Thread(target=self._do_trade, args=(card, side, form, dry), daemon=True).start()
 
-    def _do_trade(self, card, side, form, dry):
-        try:
-            precio = form.get("price")
-            if dry:
-                px = precio or self.mx.price(form["symbol"])
-                vol = self.mx.size_to_vol(form["symbol"], form["notional"], px)
-                self.q.put(
-                    (
-                        "order",
-                        (
-                            True,
-                            f"DRY-RUN {side} {t.fmt_qty(vol)} contratos "
-                            f"@ {t.fmt_price(px)} (no enviado)",
-                            card,
-                        ),
-                    )
-                )
-                return
-            data, vol, px = self.mx.open_market(
-                form["symbol"],
-                side,
-                form["notional"],
-                form["lev"],
-                form["open_type"],
-                form["tp"],
-                form["sl"],
-                precio,
-            )
-            order_id = (data or {}).get("orderId", "?")
-            self.q.put(
-                (
-                    "order",
-                    (
-                        True,
-                        f"{side} enviado: {t.fmt_qty(vol)} contratos "
-                        f"@ {t.fmt_price(px)} · id {order_id}",
-                        card,
-                    ),
-                )
-            )
-        except Exception as e:
-            self.q.put(("order", (False, str(e), card)))
+        def enviar():
+            self._card_enviando = card
+            card.set_busy(True)
 
-    def _on_order_done(self, ok, msg, card):
-        card.set_busy(False)
-        self._status(msg)
-        self._log(("OK  " if ok else "ERR ") + msg)
-        if not ok:
-            self._notice("Orden rechazada", msg, danger=True)
-        elif msg.startswith("DRY-RUN"):
-            self._notice(
-                "DRY-RUN: no se envio nada",
-                msg + "\n\nApaga DRY-RUN para operar de verdad.",
-            )
-        else:
-            self._notice("Orden enviada", msg)
-            threading.Thread(target=self._refresh_positions, daemon=True).start()
-            # una limite sin llenar no abre posicion: hay que refrescar ordenes
-            threading.Thread(target=self._refresh_orders, daemon=True).start()
+        self._control().abrir(side, form, al_enviar=enviar)
+
+    def _on_order_done(self, ok, msg):
+        card = getattr(self, "_card_enviando", None)
+        if card is not None:
+            card.set_busy(False)
+        self._card_enviando = None
 
     # --------------------------------------------------------------------- key
     def _ask_key(self):

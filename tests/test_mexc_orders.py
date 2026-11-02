@@ -134,22 +134,24 @@ def test_sin_contrato_conocido_la_orden_no_revienta():
 
 
 # --------------------------------------------- editar = cancelar y reenviar
-def _app_de_prueba(mx):
-    """App sin ventana: solo lo que usa el worker de reenvio."""
+def _control_de_prueba(mx):
+    """Control sin ventana: solo lo que usa el worker de reenvio."""
     import queue
+    import types
 
-    from tradedesk.app import App
+    from tradedesk.controller import Control
 
-    app = App.__new__(App)
-    app.mx = mx
-    app.q = queue.Queue()
-    app._log = lambda msg: None
-    app._refresh_orders = lambda: None
-    return app
+    session = types.SimpleNamespace(
+        mx=mx,
+        q=queue.Queue(),
+        log=lambda msg: None,
+        refresh_orders=lambda: None,
+    )
+    return Control(session, port=None)
 
 
 def test_modificar_cancela_y_reenvia_la_orden(mx):
-    app = _app_de_prueba(mx)
+    control = _control_de_prueba(mx)
     orden = {"orderId": "871374754337090048", "symbol": "XAU_USDT", "openType": 1}
     form = {
         "side": "SHORT",
@@ -162,7 +164,7 @@ def test_modificar_cancela_y_reenvia_la_orden(mx):
         "vol": 1818,
     }
 
-    app._replace_order_worker(orden, form)
+    control._replace_worker(orden, form)
 
     assert [p for p, _ in mx.sent] == [
         "/api/v1/private/order/cancel",
@@ -175,7 +177,7 @@ def test_modificar_cancela_y_reenvia_la_orden(mx):
     assert crear["leverage"] == 20
     assert crear["openType"] == 1, "conserva aislado/cruzado"
     assert crear["price"] == 110.0
-    assert app.q.get_nowait() == ("closed", "Orden reenviada · XAU_USDT")
+    assert control.q.get_nowait() == ("closed", "Orden reenviada · XAU_USDT")
 
 
 def test_si_el_reenvio_falla_avisa_que_la_vieja_ya_se_cancelo(mx):
@@ -185,7 +187,7 @@ def test_si_el_reenvio_falla_avisa_que_la_vieja_ya_se_cancelo(mx):
                 raise MexcError("margen insuficiente")
             return super()._post(path, payload)
 
-    app = _app_de_prueba(FallaAlCrear())
+    control = _control_de_prueba(FallaAlCrear())
     orden = {"orderId": "1", "symbol": "XAU_USDT", "openType": 1}
     form = {
         "side": "LONG",
@@ -198,11 +200,11 @@ def test_si_el_reenvio_falla_avisa_que_la_vieja_ya_se_cancelo(mx):
         "vol": 1000,
     }
 
-    app._replace_order_worker(orden, form)
+    control._replace_worker(orden, form)
 
     eventos = {}
-    while not app.q.empty():
-        kind, payload = app.q.get_nowait()
+    while not control.q.empty():
+        kind, payload = control.q.get_nowait()
         eventos.setdefault(kind, []).append(payload)
     assert "margen insuficiente" in eventos["closed"][0]
     _titulo, texto, danger = eventos["notice"][0]
