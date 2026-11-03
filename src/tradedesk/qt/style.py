@@ -4,15 +4,45 @@ Nada de colores literales: si falta un token, se agrega en `theme.py`.
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from .. import theme as t
+from ..paths import ASSETS
+
+_FAMILIA = None
+
+
+def cargar_fuentes():
+    """Registra los TTF en Qt y deja `theme.UI/NUM` apuntando a la familia real.
+
+    `theme.load_fonts()` usa GDI (`AddFontResourceExW`), que era lo que veia Tk;
+    Qt enumera con DirectWrite y no las encuentra, asi que sin esto la ventana
+    caia en Tahoma. Se llama antes de crear widgets.
+    """
+    global _FAMILIA
+    for ruta in sorted(ASSETS.joinpath("fonts").glob("*.ttf")):
+        QFontDatabase.addApplicationFont(str(ruta))
+    _FAMILIA = "Geist" if "Geist" in QFontDatabase.families() else "Segoe UI"
+    t.UI = _FAMILIA
+    t.NUM = _FAMILIA
+    return _FAMILIA
+
+
+def familia():
+    """Familia registrada (o la que pida `theme` si todavia no se cargo)."""
+    return _FAMILIA or t.NUM
 
 
 def fnt(size, bold=False, num=True):
-    """Fuente en pixeles (como CustomTkinter), no en puntos."""
-    fuente = QFont(t.NUM if num else t.UI)
+    """Fuente en pixeles (como CustomTkinter), no en puntos.
+
+    Geist va primero y cubre todo lo que muestra la app; Segoe UI y Arial son
+    solo el respaldo si los TTF no se pudieron registrar (sin la lista, Qt caia
+    en Tahoma). No hacen falta familias CJK: Qt resuelve los glifos que falten.
+    """
+    fuente = QFont(familia())
+    fuente.setFamilies([familia(), "Segoe UI", "Arial"])
     fuente.setPixelSize(int(size))
     fuente.setWeight(QFont.DemiBold if bold else QFont.Normal)
     return fuente
@@ -49,18 +79,26 @@ def boton(texto, ancho=None, alto=22, fondo=None, color=None, radio=None, size=1
 
 
 class Segmentado(QWidget):
-    """Dos opciones excluyentes, como el CTkSegmentedButton de la app."""
+    """Dos opciones excluyentes en una sola caja, como el CTkSegmentedButton."""
 
     def __init__(self, opciones, elegida, al_cambiar=None):
         super().__init__()
         self.al_cambiar = al_cambiar
         self.elegida = elegida
+        self.setObjectName("seg")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(
+            f"QWidget#seg {{ background: {t.INPUT}; border: 1px solid {t.BORDER};"
+            f" border-radius: {t.R_CHIP}px; }}"
+        )
         self.botones = {}
         fila = QHBoxLayout(self)
-        fila.setContentsMargins(0, 0, 0, 0)
-        fila.setSpacing(2)
+        fila.setContentsMargins(2, 2, 2, 2)
+        fila.setSpacing(0)
         for texto in opciones:
-            boton_ = boton(texto, None, 24, size=10)
+            boton_ = QPushButton(texto)
+            boton_.setCursor(Qt.PointingHandCursor)
+            boton_.setFont(fnt(12))
             boton_.clicked.connect(lambda _=False, cual=texto: self._elegir(cual))
             fila.addWidget(boton_)
             self.botones[texto] = boton_
@@ -76,9 +114,9 @@ class Segmentado(QWidget):
         for texto, boton_ in self.botones.items():
             activo = texto == self.elegida
             boton_.setStyleSheet(
-                f"QPushButton {{ background: {t.SURFACE if activo else t.INPUT};"
-                f" color: {t.TEXT if activo else t.MUTED}; border: 1px solid {t.BORDER};"
-                f" border-radius: {t.R_CHIP}px; }}"
+                f"QPushButton {{ background: {t.SURFACE if activo else 'transparent'};"
+                f" color: {t.TEXT if activo else t.MUTED}; border: 0px;"
+                f" border-radius: {t.R_CHIP - 2}px; }}"
             )
 
 
@@ -157,4 +195,64 @@ QStatusBar {{
     background: {t.BG};
     color: {t.MUTED};
 }}
+QToolTip {{
+    background: {t.CARD};
+    color: {t.TEXT};
+    border: 1px solid {t.BORDER};
+    padding: 6px 8px;
+}}
 """
+
+
+def logo(nombre, alto=22, completo=False):
+    """Pixmap del logo del broker a la altura pedida.
+
+    `completo=True` usa el wordmark (`<nombre>_full.svg`, marca + nombre) y si no
+    la marca sola; los colores ya vienen normalizados porque Qt no lee variables
+    CSS en los SVG.
+    """
+    from PySide6.QtGui import QPainter, QPixmap
+    from PySide6.QtSvg import QSvgRenderer
+
+    sufijo = "_full" if completo else ""
+    ruta = ASSETS / f"{nombre}{sufijo}.svg"
+    if not ruta.exists():
+        return QPixmap()
+    render = QSvgRenderer(str(ruta))
+    if not render.isValid():
+        return QPixmap()
+    base = render.defaultSize()
+    escala = alto / max(1, base.height())
+    imagen = QPixmap(max(1, round(base.width() * escala)), alto)
+    imagen.fill(Qt.transparent)
+    pintor = QPainter(imagen)
+    render.render(pintor)
+    pintor.end()
+    return imagen
+
+
+def barra_oscura(ventana):
+    """Barra de titulo en el tema oscuro (Windows 10 y 11).
+
+    Hay que llamarla con el HWND ya creado **y** forzar el marco: DWM no repinta
+    la barra hasta que algo la invalida, y por eso se veia blanca hasta minimizar
+    y volver a abrir.
+    """
+    try:
+        import ctypes
+
+        hwnd = int(ventana.winId())
+        dwm = ctypes.windll.dwmapi
+        activo = ctypes.c_int(1)
+        for atributo in (20, 19):  # 20: Win10 1903+ / Win11, 19: builds anteriores
+            if dwm.DwmSetWindowAttribute(hwnd, atributo, ctypes.byref(activo), 4) == 0:
+                break
+        fondo = ctypes.c_int(0x0A0A0A)  # COLORREF (BGR) = #0A0A0A
+        dwm.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(fondo), 4)  # caption color
+        letras = ctypes.c_int(0xEDEAE8)  # #E8EAED en BGR
+        dwm.DwmSetWindowAttribute(hwnd, 36, ctypes.byref(letras), 4)  # text color
+        # invalida el marco para que Windows lo repinte ya (SWP_FRAMECHANGED)
+        banderas = 0x0020 | 0x0002 | 0x0001 | 0x0004 | 0x0010
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, banderas)
+    except Exception:
+        pass

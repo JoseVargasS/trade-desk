@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QVBoxLayout,
     QWidget,
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
 from .. import theme as t
 from ..forms import valores_orden
 from ..mexc import break_even_price, margen_inicial, num_texto, pnl_en_precio
-from .style import Segmentado, boton, etiqueta, fnt, qss
+from .style import Segmentado, boton, etiqueta, fnt, logo, qss
 
 
 class Modal(QDialog):
@@ -195,6 +196,8 @@ class _Formulario(Modal):
         self.lbl_resumen = None
         if resumen:
             self.lbl_resumen = etiqueta(resumen(self.leer()), 10, muted=True)
+            # el resumen puede traer color por linea (TP verde / SL rojo)
+            self.lbl_resumen.setTextFormat(Qt.RichText)
             self.columna.addWidget(self.lbl_resumen)
             for linea in self.campos.values():
                 linea.textChanged.connect(self._refrescar)
@@ -311,6 +314,59 @@ def ask_key(parent, verify):
     dialogo = _Claves(parent, verify)
     dialogo.exec()
     return dialogo.resultado
+
+
+class PanelBrokers(Modal):
+    """Brokers disponibles: logo, estado de las claves y botón para cargarlas."""
+
+    def __init__(self, parent, filas, al_claves):
+        super().__init__(parent, "Brokers", 430)
+        self.al_claves = al_claves
+        aviso = etiqueta(
+            "Las claves se guardan en el Windows Credential Manager, nunca en config.json.",
+            10,
+            muted=True,
+        )
+        aviso.setWordWrap(True)
+        self.columna.addWidget(aviso)
+        for nombre, titulo, conectado, saldo in filas:
+            caja = QWidget()
+            caja.setStyleSheet(f"QWidget {{ background: {t.INPUT}; border-radius: {t.R_CTRL}px; }}")
+            fila = QHBoxLayout(caja)
+            fila.setContentsMargins(10, 8, 10, 8)
+            fila.setSpacing(10)
+            marca = QLabel()
+            marca.setPixmap(logo(nombre, 22))
+            marca.setStyleSheet("background: transparent;")
+            fila.addWidget(marca)
+            fila.addWidget(etiqueta(titulo, 13, True))
+            fila.addStretch(1)
+            estado = "Conectado" if conectado else "Sin claves"
+            if conectado:
+                estado += f" · {t.fmt_usdt(saldo)} USDT"
+            fila.addWidget(etiqueta(estado, 11, color=t.GREEN if conectado else t.MUTED))
+            accion = boton(
+                "Cambiar" if conectado else "Agregar", 92, 28, t.SURFACE, t.TEXT, t.R_CHIP, 11
+            )
+            accion.clicked.connect(lambda _=False, n=nombre: self._claves(n))
+            fila.addWidget(accion)
+            self.columna.addWidget(caja)
+        cerrar = boton("Cerrar", 110, 32, t.INPUT, t.TEXT, t.R_CTRL, 12)
+        cerrar.clicked.connect(self.accept)
+        pie = QHBoxLayout()
+        pie.addStretch(1)
+        pie.addWidget(cerrar)
+        self.columna.addLayout(pie)
+
+    def _claves(self, nombre):
+        self.accept()
+        self.al_claves(nombre)
+
+
+def brokers(parent, filas, al_claves):
+    """Abre el panel de brokers; `filas` = [(logo, titulo, conectado), ...]."""
+    panel = PanelBrokers(parent, filas, al_claves)
+    panel.exec()
 
 
 class EditorOrden(Modal):
@@ -512,18 +568,20 @@ class QtPort:
 
 
 def _lineas_pnl(pos, long_, tp, sl):
-    """Lo que se gana o pierde si el TP/SL se ejecuta, en USDT."""
+    """Lo que se gana o pierde si el TP/SL se ejecuta, en USDT y con color."""
     lineas = []
     for etiqueta_pnl, texto in (("TP", tp), ("SL", sl)):
         try:
             precio = float((texto or "").replace(",", "").strip())
         except ValueError:
             continue
+        pnl = pnl_en_precio(pos, long_, precio)
+        color = t.GREEN if pnl >= 0 else t.RED
         lineas.append(
-            f"{etiqueta_pnl} {t.fmt_price(precio)} → "
-            f"{t.fmt_pnl(pnl_en_precio(pos, long_, precio))} USDT"
+            f"<span style='color:{color}'>{etiqueta_pnl} {t.fmt_price(precio)} → "
+            f"<b>{t.fmt_pnl(pnl)} USDT</b></span>"
         )
-    return "\n".join(lineas) or "Escribe un precio para ver la ganancia o perdida."
+    return "<br>".join(lineas) or "Escribe un precio para ver la ganancia o pérdida."
 
 
 def editar_tpsl(parent, pos, long_, precio):

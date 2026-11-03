@@ -21,7 +21,7 @@ el acceso directo, o la app deja de abrir con doble clic.
 
 ```powershell
 pip install -e ".[dev]"     # deps de la app + pytest/ruff/pre-commit
-python -m pytest            # ~70 tests (~15 s): logica pura, payloads y parseo
+python -m pytest            # 66 tests (~15 s): logica pura, payloads y parseo
 python -m ruff check .      # lint
 python -m ruff format .     # formato (obligatorio: CI corre --check)
 scripts\check.bat           # lint + formato + tests de una
@@ -42,6 +42,10 @@ scripts\check.bat           # lint + formato + tests de una
   archivo se cruza, se parte por responsabilidad (`view.py` ya salió de `shell.py`).
 - Colores, fuentes y formatos numéricos **solo** en `theme.py`. La vista Qt usa
   `qt.style.fnt`, que da el tamaño en **píxeles** (no en puntos).
+- La familia es **Geist** y viaja con la app (`assets/fonts`). `qt.style.fnt` la pide con
+  `setFamilies(["Geist", "Segoe UI", "Arial"])`: si un día no se registra, cae en Segoe
+  UI y no en Tahoma. No hacen falta familias CJK ni de macOS: Qt resuelve los glifos que
+  falten y Geist ya cubre todo lo que pinta la app (✕ ▾ ≈ → · — ¿ ¡ acentos).
 - **Solo se corre el test que cubre lo que se tocó** (matriz en §9). Nunca la suite entera "por
   si acaso": cuesta ~15 s y gasta cuota del usuario sin aportar nada si el cambio fue de un
   texto o un decimal. Si no hay test para esa zona, alcanza con mirar el resultado (captura).
@@ -99,7 +103,11 @@ Decisiones de fondo que **no** están en discusión:
    Los **lápices** de Monto, Precio y TP/SL abren el editor (lado, apalancamiento, margen,
    precio, TP y SL); en la columna de acciones están `Modificar` y `Cancelar`, y arriba a la
    derecha `Cancelar todo`. Una orden límite no aparece en Posiciones hasta que se llena.
-9. Pestaña **Historial**: últimas 50 órdenes (ejecutadas, canceladas, pendientes).
+9. Pestaña **Historial**: las últimas órdenes de los dos brokers, **agrupadas en
+   operaciones** (una fila por posición, no por orden): hora de apertura y de cierre, par
+   con el wordmark del broker, lado, tamaño, entrada, salida, PnL, fee, **neto** (PnL − fee)
+   y estado (`Cerrada` / `Parcial` / `Abierta`). Los cierres parciales se suman en la misma
+   fila en vez de aparecer sueltos.
 
 `DRY-RUN` viene **siempre encendido** en cada arranque y bloquea **abrir, cerrar y reverse**.
 El **TP/SL**, el **margen** y **cancelar órdenes** sí funcionan con DRY-RUN activo: son
@@ -119,10 +127,13 @@ raiz/
     session.py              pollers, cola, config y caches sin UI         210
     controller.py           casos de uso: abrir, cerrar, TP/SL, ordenes   420
     forms.py                parseo puro de tarjeta y editor de orden       60
+    operaciones.py          empareja ordenes en operaciones (historial)   250
+    archivo.py             operaciones guardadas en disco (upsert)        60
     layout.py               anchos/altos de las tablas (sin UI)            60
     pairs.py                filtro puro del buscador de pares              60
     theme.py                color, tipografia, radios, formatos           120
     mexc.py                 firma, endpoints, USDT->contratos, fee, liq   500
+    bitunix.py              firma, endpoints, monedas (qty), specs        290
     creds.py                Windows Credential Manager                     29
     assets/                 icon.ico, icon.png, fonts/*.ttf
     qt/
@@ -165,6 +176,12 @@ los controles; los casos de uso y los payloads viven en el controlador.
 
 `config.json` (ignorado por git) guarda **solo** `symbol`, `leverage`, `margin`, `size_mode`
 por tarjeta. **No** guarda tamaño, TP, SL ni DRY-RUN (ver §7).
+
+`operaciones.json` (también ignorado) es el **archivo de operaciones**: cada operación
+cerrada se guarda con una clave estable (`_clave`) y se actualiza en sitio (un parcial que
+después se cierra, o una fee que se ajusta). Existe porque los exchanges purgan su
+historial (~3 meses): sin esto, lo viejo desaparece de la pestaña. Se escribe de forma
+atómica (tmp + `os.replace`) y al arrancar se pinta lo guardado antes de tocar la red.
 
 `trades.log` registra cada intento: hora, resultado, `orderId`, símbolo, `vol`. Nunca la key.
 
@@ -250,8 +267,71 @@ distintos entre llamadas (se observó `0.0002` y `0.0004` en la misma sesión). 
 La columna Fee de posiciones muestra **comisión + funding** (`mexc.fee_desglose`):
 `totalFee` es la comisión ya cobrada al abrir y `holdFee` el funding; `lowSaveTotalFee` es
 "Fees saved" y **no** suma. El importe lleva subrayado punteado y al pasar el puntero aparece
-el desglose (`tooltip.NumeroConDetalle`). Ojo: el terminal de MEXC pinta su "Fees" como
+el desglose (`qt/cells.py`: subrayado punteado + `Qt.ToolTipRole` con `QToolTip`). Ojo: el terminal de MEXC pinta su "Fees" como
 `totalFee + lowSaveTotalFee`, así que su número es más alto que el real.
+
+### Bitunix (segundo broker)
+
+| Tema | Detalle |
+|---|---|
+| Base | `https://fapi.bitunix.com` |
+| Firma | `SHA256(SHA256(nonce + timestamp + apiKey + queryParams + body) + secret)` |
+| Cabeceras | `api-key`, `nonce` (32 hex), `timestamp` ms, `sign`, `Content-Type` |
+| Errores | **HTTP 200 también con error**: el código de negocio va en `code` (0 = éxito) |
+| Símbolo | `BTCUSDT` (la app lo canonicaliza; MEXC usa `BTC_USDT`) |
+| Tamaño | **monedas** (`qty` 0.01 = 0.01 BTC), no contratos |
+
+```
+GET  /api/v1/futures/market/tickers            precio (`lastPrice`, `markPrice`, `open`)
+GET  /api/v1/futures/market/trading_pairs      specs: `minTradeVolume`, `basePrecision`,
+                                               `quotePrecision`, `maxLeverage`
+GET  /api/v1/futures/account                   saldo por `marginCoin`
+GET  /api/v1/futures/position/get_pending_positions
+GET  /api/v1/futures/trade/get_pending_orders  devuelve `{total, orderList}`
+GET  /api/v1/futures/tpsl/get_pending_orders
+POST /api/v1/futures/trade/place_order         abrir/cerrar
+POST /api/v1/futures/trade/flash_close_position cierre total a mercado
+POST /api/v1/futures/trade/close_all_position   cerrar todo
+POST /api/v1/futures/trade/cancel_orders        body {symbol, orderList:[{orderId}]}
+POST /api/v1/futures/account/change_leverage    {marginCoin, symbol, leverage}
+POST /api/v1/futures/account/adjust_position_margin
+GET  /api/v1/futures/account/position_mode      HEDGE | ONE_WAY
+```
+
+**Firma de GET con query params**: Bitunix firma los parámetros **sin separadores**
+(`id=1&uid=200` se firma como `id1uid200`, ordenados por clave). Con `&`/`=` responde
+`10007 Signature Error`; los GET sin params funcionan porque la cadena queda vacía.
+Cualquier `limit`/`skip`/`symbol` en un GET necesita esta forma.
+
+**Modificar y TP/SL**: `POST /trade/modify_order` cambia qty/precio/TP-SL de una orden viva
+sin cancelar (MEXC no tiene esto: ahí se cancela y reenvía). `POST /tpsl/position/place_order`
+pone TP/SL **a nivel de posición** (uno por posición, sin `qty`, cierra todo al dispararse) y
+`POST /tpsl/cancel_order {symbol, orderId}` lo cancela. En el historial, `price` viene como
+`"MARKET"` en las órdenes a mercado: el precio ejecutado es `avgPrice`.
+
+**Campos reales** (confirmados con una posición abierta y cerrada el 27-jul): la
+posición trae `qty`, `avgOpenPrice` (no `entryPrice`), `side` `BUY`/`SELL` (BUY = long),
+`margin`, `marginRate`, `unrealizedPNL`, `liqPrice`, `fee` y `funding`. El TP/SL viene
+**partido en dos registros** (`tpsl/get_pending_orders`: uno con `tpPrice` y otro con
+`slPrice`), por eso se juntan por símbolo al decorar la posición.
+
+**`flash_close_position` bloquea la apertura inmediata**: después de cerrar con ese
+endpoint, Bitunix rechaza un `place_order` de apertura del mismo par con `30016`
+(probado con 0.0001 y 0.0002, y esperando hasta 10 s). La apertura en frío del mismo
+tamaño entra sin problema. Por eso `reverse` cierra con `place_order` reduceOnly y no
+con flash, y el cierre normal de la fila sí puede usar flash (no reabre nada).
+
+**Órdenes en modo HEDGE** (es el modo de la cuenta real): llevan `tradeSide`
+(`OPEN`/`CLOSE`) y, al cerrar, `positionId` + `reduceOnly: true`. Para el cierre
+total se usa `flash_close_position`, que evita la ambigüedad del `side` (la doc de
+Bitunix pide `side` = lado de la **posición**, no de la orden). No hay reverse nativo:
+`Bitunix.reverse` cierra a mercado y abre la contraria. El mínimo de BTC es
+`0.0001` (≈ 7,7 USDT a 1x): si el floor deja 0 monedas, la orden **no se manda** y
+se avisa, en vez de mandar `qty: 0`.
+
+`contractSize` es **1** en Bitunix: el nocional es `qty × precio`, así que la
+conversión USDT→qty divide por el precio y hace floor al `minTradeVolume` del par
+(BTC: step `0.0001`). El cambio 24 h se calcula con `open` como referencia.
 
 **Seguridad de la key.** Se crea en MEXC con permisos de futuros + lectura, **sin retiros ni
 transferencias**, y con **IP vinculada** (sin IP la key expira a los 90 días). Si el ISP cambia
@@ -278,7 +358,10 @@ en la cabecera con botón para copiarla.
 - UI en `Geist`, **todo número en `theme.NUM`**, que es la misma familia (proporcional,
   no tabular): las columnas van alineadas a la derecha, así que el borde derecho no se mueve.
   Se probó `Geist Mono` y se descartó por ~19 % más ancha. Se registran en el proceso con
-  `AddFontResourceExW`; no se instalan en Windows.
+  `AddFontResourceExW`; no se instalan en Windows. **En Qt además hay que registrarlas con
+  `QFontDatabase.addApplicationFont`** (`qt/style.cargar_fuentes()`, se llama en
+  `qt/__main__.py` antes de crear widgets): `AddFontResourceExW` es GDI y DirectWrite no
+  las ve, así que sin eso la ventana cae en Tahoma.
 - Todo número se formatea con `theme.fmt_*`. PnL y fee con 4 decimales; precios de orden
   límite con `fmt_price_exact` (`priceScale` del contrato).
 - La fila de posiciones no crece: la barra de cierre va en dos líneas dentro de los 200 px
@@ -293,8 +376,100 @@ en la cabecera con botón para copiarla.
 - **Ningún `show`/`confirm` dentro de `_drenar`.** Un modal ahí adentro congela el refresco.
   Los avisos pasan por `VistaQt._notificar`, que los encola y abre uno por vez fuera del drain.
 - Los avisos de la API se ven en la UI (barra de estado o diálogo), nunca se silencian.
-- La selección de posiciones se restaura por `positionId` en cada refresco; no se pierde
-  porque el poller reemplace las filas cada 3 s.
+- **Los errores del poller no abren modal**: van a la barra de estado y el poller afloja
+  el ritmo (0.7 s → 5 s si algo falla). Un modal por cada reintento de 510 tapaba la app.
+- **El `%` de cierre abre un panel con slider lineal de 1 a 100** (el 50 % queda al medio)
+  y los números 0/25/50/75/100 pintados por el propio slider, debajo de sus puntos. El
+  mínimo se calcula con el **paso de la unidad**: `ceil(100 * paso / holdVol)`, donde paso
+  es **1** en MEXC (contratos) y el `qtyStep` del par en Bitunix (`_qtyStep`, 0.0001 BTC).
+  Antes se usaba `ceil(100/holdVol)` a secas y en Bitunix daba 100 % (0,0003 → 333.334):
+  el slider no se movía. Por debajo del mínimo la bolita vuelve y esa zona se pinta
+  apagada; el resumen dice `Cierras: X USDT ≈ N contratos|monedas`. El volumen del cierre
+  sale de `forms.volumen_cerrar(hold, pct, paso)`, que el controlador usa igual: floor al
+  paso y 100 % exacto (un cierre total no puede fallar por redondeo). El clic y el arrastre los mapea `SliderPct`
+  sobre la misma geometría que dibuja: el estilo de Qt usa la caja del handle y el primer
+  clic caía en otro valor. El chip `Mercado` y el `%` van sin `▾`, y los segmentados de la
+  tarjeta van uno debajo del otro a todo el ancho, como en la Tk.
+- El globo de la fee distingue **lo pagado**, **el próximo funding** y **lo que costaría
+  cerrar**: `Comisión pagada`, `Funding cobrado` (si > 0), `Fee pagada` (la suma, que es el
+  número de la celda), `Fees saved` (si > 0), `Funding hh:mm (tasa%)` con `paga`/`cobra`
+  y el importe estimado, y `Al cerrar (taker X %)`.
+- El fee viaja en el **mismo payload que el PnL** (se repinta cada 3 s), así que no puede
+  quedar viejo: solo **cambia** cuando el broker cobra algo — funding cada 8 h o al cerrar
+  una parte. `Session.refresh_fondos` pide la tasa y la hora del próximo funding cada 60 s
+  (`mexc.funding` / `bitunix.funding`) y la publica en `("funding", {...})`.
+  Ojo con la unidad: MEXC manda `fundingRate` en **fracción** (0.0001) y Bitunix en
+  **porcentaje** (`"0.01"`); el módulo de Bitunix lo normaliza a fracción.
+
+- El detalle de la fee es un **bocadillo propio** (`cells.Bocadillo`): ventana sin marco con
+  caja redondeada y punta, sale **arriba de la celda y centrado**, apuntando al importe. No
+  se usa `QToolTip` (no deja dibujar la punta ni elegir el lado) y así tampoco aparece el
+  retardo de ~700 ms: `VistaQt` escucha `entered` y llama a `mostrar()` al entrar.
+- La barra de título va oscura con `qt.style.barra_oscura`: `DwmSetWindowAttribute` 20
+  (immersive dark; en builds viejas 19) y **`SetWindowPos` con `SWP_FRAMECHANGED`**, porque
+  DWM no repinta la barra sola y se veía blanca hasta minimizar y volver. Los atributos 35/36
+  (color de barra y de letras) son solo Windows 11 y fallan en Windows 10 sin problema.
+- La columna TP/SL de la tabla de órdenes se muestra como MEXC: `TP: Last≥81,000.00` en
+  verde y `SL: Last≤71,000.00` en rojo (y `TP: —` / `SL: —` en gris si no hay nivel).
+- Las dos líneas vivas del editor de TP/SL también van con color por signo del PnL
+  (`<span style>` con `setTextFormat(Qt.RichText)`): verde si gana, rojo si pierde.
+- La selección de posiciones se restaura por `positionId` y las filas se **actualizan en
+  sitio**: recrearlas cada 3 s reseteaba el `%` de cierre a 100 y cerraba el panel del
+  slider, que cuelga de la barra de cierre de la fila.
+- **Cada tarjeta elige su broker** con el selector de la cabecera, que muestra el
+  **wordmark** (marca + nombre) del broker: `assets/mexc_full.svg` (letras blancas, como el
+  original) y `assets/bitunix_full.svg` (marca `#28D2B0`, letras `#E8EAED`, porque Qt no
+  resuelve las variables CSS del SVG). Las versiones sin `_full` son solo la marca y se usan
+  en el desplegable. Arranca **sin broker**: muestra `Broker` y `Elige un broker para
+  operar`, con `LONG`/`SHORT` apagados. La elección se guarda por tarjeta en `config.json`
+  (`exchange`); las tarjetas viejas sin ese campo se asumen de MEXC. Cambiar de broker **no
+  republica** el deck (borraría el tamaño escrito): el contrato se pide al cliente nuevo y
+  el precio llega con el siguiente ticker.
+- Las tarjetas se **arrastran en vivo** para reordenarlas. La fila **no usa layout**: las
+  tarjetas se colocan a mano en un lienzo (`_lienzo`) a `indice * (286 + 10)`, así cada una
+  puede animarse sola. Al arrastrar, la tarjeta agarrada sigue al cursor por encima del
+  resto y, cuando su centro cruza el slot de otra, se reordena la lista y **las demás
+  animan su `pos`** (`QPropertyAnimation`, 150 ms, `OutCubic`): se ve cómo la arrastrada
+  las empuja. Al soltar, la arrastrada anima hasta su slot y el orden queda guardado
+  (`Session.mover_tarjeta`). Arranca solo desde la cabecera (primeros 46 px). **Sin hueco
+  punteado** y sin `QDrag`: el hueco se veía como un recuadro raro encima de las tarjetas y
+  el `QDrag` mostraba una copia flotante con la original quieta.
+- **Cada tarjeta tiene un `id`** (`BTC_USDT`, `BTC_USDT#2`, …), así el mismo par puede estar
+  en los dos brokers a la vez. El precio se cachea por `id`, no por símbolo, y el ticker
+  publica `("ticker", id, precio, cambio)`. El buscador suma al catálogo de MEXC los pares
+  que solo tiene Bitunix (se guardan con el símbolo de MEXC y cada módulo lo convierte).
+- La cabecera muestra el **USDT disponible de cada broker** (`MEXC 4.906,26 · Bitunix
+  309,61 USDT`, cada 15 s) y lo mismo en el panel `Brokers`. MEXC lo lee de
+  `mx.available()` (`/private/account/assets`, campo `availableBalance`) y Bitunix de
+  `bx.available()` (`/futures/account`, `marginCoin` USDT, campo `available`).
+- En la tabla de posiciones la columna del par lleva el ticker y, debajo, el **wordmark del
+  broker** a 12 px (`CeldaPar`), así se ve de un vistazo de dónde es cada posición.
+- El **historial** es una fila por **operación**, no por orden: `operaciones.py` empareja
+  aperturas y cierres. MEXC trae `positionId` (agrupa exacto); Bitunix no lo trae en el
+  historial, así que se usa una cola FIFO por (exchange, símbolo, lado) con `reduceOnly`
+  para saber si una fila abre o cierra. Un cierre que no encuentra apertura (posición
+  anterior a la ventana de 50 órdenes) sale como fila `Cerrada` con entrada `—`.
+  Columnas en `OPER_COLS` (`layout.py`): apertura, cierre, par (con el wordmark del broker
+  vía `CeldaPar` compacta), lado, tamaño, entrada, salida, PnL, fee, neto y estado.
+  `Session.cargar_historial` mezcla los dos brokers y publica ya agrupado.
+- Las operaciones se **guardan en `operaciones.json`** (`archivo.Archivo`): `cargar_historial`
+  fusiona lo que trae el broker con lo archivado y publica el resultado, así que lo que ya
+  no existe en el exchange sigue en la tabla. Al arrancar, `Session.__init__` publica el
+  archivo de una vez (sin red) y después el refresco agrega lo nuevo.
+- El historial viene **paginado** (`HISTORIAL_PAGINA = 50` órdenes por broker): la página 1
+  se refresca sola cada 15 s y el botón **Ver más** pide la siguiente de cada broker
+  (`mexc.history(size, pagina)` → `page_num`, `bitunix.history(limite, salto)` → `skip`).
+  Las órdenes se acumulan en `Session._hist_ordenes` con clave `(broker, orderId)`, así el
+  refresco **fusiona** (no borra ni duplica) y `history_mas` apaga el botón cuando un broker
+  devuelve menos de 50. Con una página sola se veían ~1 mes de operaciones: por eso "llegaba
+  hasta setiembre".
+- Las celdas con lápiz se reasignan en cada refresco (`CeldaLapiz.set_accion`): la acción
+  tiene que resolver la fila viva (`_posicion(fila)`), no cerrar sobre el dict que existía
+  al crear el widget. Así se abrió el editor con un TP que ya se había borrado.
+- La columna TP / SL de posiciones muestra `81,000.00 / 71,000.00`, y `--` en el lado que
+  no tiene nivel (`-- / 71,000.00`, `-- / --`): los guiones se llenan solos. `set_partes`
+  **crea etiquetas si hacen falta**: antes la celda se construía con un solo valor y al
+  aparecer el TP (1 → 3 valores) no había dónde dibujarlo y se perdía.
 
 ---
 
@@ -373,6 +548,14 @@ en la cabecera con botón para copiarla.
     entre abrir el diálogo y guardar, `_tpsl_worker` rechaza en vez de que `plan_tp_sl`
     guarde ese SL como TP.
 
+15. **La vista Qt caía en Tahoma en vez de Geist**: `theme.load_fonts()` registra los TTF
+    con `AddFontResourceExW` (GDI), que era lo que veía Tk. Qt enumera con DirectWrite y
+    además escanea al arrancar, así que `QFont("Geist")` no existía y resolvía a Tahoma con
+    `exactMatch: False` (toda la app con la tipografía equivocada). Ahora
+    `qt/style.cargar_fuentes()` los registra con `QFontDatabase.addApplicationFont` y
+    `app.setFont` deja la familia de base; se comprueba con
+    `QFontInfo(w.font()).family() == "Geist"`.
+
 **Cómo diagnosticar un bloqueo de UI:** `perf.log` sigue siendo el registro histórico de la
 app Tk; en Qt, un modal abierto dentro de `_drenar` volvería a congelar el refresco, así que
 los avisos se encolan fuera del drain (§6).
@@ -385,7 +568,7 @@ los avisos se encolan fuera del drain (§6).
 python app.py                 # lanzador del acceso directo, con consola para ver errores
 python -m tradedesk           # lo mismo, con PYTHONPATH=src
 python -m tradedesk.qt        # abre la vista Qt directamente
-python -m pytest              # ~70 tests: logica pura, payloads y parseo
+python -m pytest              # 66 tests: logica pura, payloads y parseo
 python -m ruff check .        # lint
 python -m ruff format --check .   # formato (lo que corre el CI)
 scripts\check.bat             # las tres cosas juntas
@@ -458,6 +641,30 @@ posición real. El **Break-even** también: la cuenta solo en `test_mexc_pure.py
 cubra comisiones y que nunca quede del lado de la pérdida por el redondeo) y en el
 diálogo; falta ponerlo una vez con una posición en ganancia y comprobar que el PnL queda
 en ~0 al ejecutarse.
+
+**Bitunix (segundo broker), estado:**
+
+- **Funciona:** elegir broker por tarjeta, precio y variación propios, contrato y
+  `qty` en monedas, posiciones y órdenes mezcladas en las mismas tablas (con el
+  wordmark del broker), **abrir** (mercado y límite, con TP/SL en la misma orden),
+  **cerrar** (total por `flash_close_position`, parcial y límite por `place_order`
+  reduce-only), **cerrar todo**, **cancelar** (una o todas) y **apalancamiento**.
+- **Todo lo de la interfaz funciona igual que en MEXC:** editar TP/SL de una posición
+  (nivel de posición, verificado: 70.000/90.000 y luego 71.000/95.000), modificar una orden
+(nativa, verificado 60.052,6 → 60.552,6 con qty 0,0002), cambiar margen (verificado
++1 USDT: 15,4077 → 16,4077), historial, y el mismo par en dos brokers (`BTC_USDT#2`).
+- Tests de payload: `tests/test_bitunix_orders.py` (11 casos, sin red).
+- **Probado con dinero real (27-jul), todo cerrado:**
+  - SHORT `0.0001` BTC 1x con TP 70.000 / SL 90.000, ~2 min, cerrado con flash: saldo
+    `309,6128 → 309,6074` (≈ 0,0054 USDT). Destapó tres mapeos: `side` `SELL` se leía
+    como LONG, la entrada viene en `avgOpenPrice` y el TP/SL en dos registros.
+  - Límite `0.0001` a 60.006 (lejos) → apareció en abiertas y se canceló con
+    `cancel_orders`; la orden decorada sale bien (`side` 1, `price`, `_exchange`).
+  - Parcial: `0.0002` short, cierre de `0.0001` (reduceOnly) → quedó `0.0001`, y el
+    resto con flash. Confirma que el `side` documentado (BUY para cerrar un long) sirve.
+  - `reverse`: SHORT `0.0002` → LONG `0.0002` en 1,2 s (con el cierre reduceOnly).
+- **Sin probar:** que un TP/SL se **dispare** (lo prueba el usuario; la colocación ya está
+  verificada) y el cierre límite de una posición.
 
 **F7 (opcional, no empezada):** gráficos de velas con TP/SL arrastrables (`pyqtgraph`).
 

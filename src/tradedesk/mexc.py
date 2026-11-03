@@ -411,16 +411,39 @@ class Mexc:
             or []
         )
 
-    def history(self, size=50):
+    def history(self, size=50, pagina=1):
+        """Órdenes históricas (las más nuevas primero), paginadas de 1 en adelante."""
         return (
             self._get(
-                "/api/v1/private/order/list/history_orders", {"page_num": 1, "page_size": size}
+                "/api/v1/private/order/list/history_orders",
+                {"page_num": pagina, "page_size": size},
             )
             or []
         )
 
     def assets(self):
         return self._get("/api/v1/private/account/assets") or []
+
+    def available(self, currency="USDT"):
+        """Saldo disponible de esa moneda en futuros (lo que se puede usar)."""
+        for fila in self.assets():
+            if str(fila.get("currency") or "").upper() == currency:
+                return float(fila.get("availableBalance") or 0)
+        return 0.0
+
+    def funding(self, symbol):
+        """Tasa y hora del próximo funding del par (MEXC la da en fracción)."""
+        filas = self._get("/api/v1/contract/funding_rate", {"symbol": symbol}) or []
+        if isinstance(filas, dict):
+            filas = [filas]
+        for fila in filas:
+            if fila.get("symbol") == symbol:
+                return {
+                    "tasa": float(fila.get("fundingRate") or 0),
+                    "proxima": float(fila.get("nextSettleTime") or 0) / 1000,
+                    "ciclo": int(fila.get("collectCycle") or 8),
+                }
+        return {}
 
     def open_market(
         self, symbol, side, notional_usdt, leverage, open_type=1, tp=None, sl=None, price=None
@@ -512,7 +535,7 @@ class Mexc:
             or []
         )
 
-    def tpsl_place(self, position_id, vol, tp=None, sl=None):
+    def tpsl_place(self, position_id, vol, tp=None, sl=None, simbolo=None):
         payload = {
             "positionId": int(position_id),
             "vol": float(vol),
@@ -528,11 +551,11 @@ class Mexc:
             payload["stopLossType"] = 0  # 0 = SL a mercado
         return self._post("/api/v1/private/stoporder/place", payload)
 
-    def tpsl_cancel(self, stop_id):
+    def tpsl_cancel(self, stop_id, simbolo=None):
         # el endpoint espera un array de objetos, no un objeto
         return self._post("/api/v1/private/stoporder/cancel", [{"stopPlanOrderId": int(stop_id)}])
 
-    def change_margin(self, position_id, amount, kind="ADD"):
+    def change_margin(self, position_id, amount, kind="ADD", simbolo=None, side=None):
         return self._post(
             "/api/v1/private/position/change_margin",
             {

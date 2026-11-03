@@ -13,10 +13,10 @@ import threading
 import time
 
 from . import theme as t
+from .forms import volumen_cerrar
 from .mexc import (
     MexcError,
     break_even_price,
-    close_vol,
     es_editable,
     mark_price,
     plan_tp_sl,
@@ -44,7 +44,35 @@ class Control:
         return int(self.session.contract_for(symbol).get("priceScale") or 2)
 
     # ------------------------------------------------------------------- abrir
-    def abrir(self, side, form, al_enviar=None):
+    def _cliente_de(self, nombre):
+        """Cliente de ese broker; si la sesión no sabe de brokers, MEXC."""
+        traer = getattr(self.session, "cliente", None)
+        if callable(traer):
+            encontrado = traer(nombre)
+            if encontrado is not None:
+                return encontrado
+        return self.mx
+
+    def _brokers(self):
+        """(nombre, cliente) de los brokers conectados."""
+        traer = getattr(self.session, "cliente", None)
+        if not callable(traer):
+            return [("mexc", self.mx)]
+        lista = [(n, traer(n)) for n in ("mexc", "bitunix") if traer(n) is not None]
+        return lista or [("mexc", self.mx)]
+
+    def broker_de(self, objeto, defecto="mexc"):
+        """Cliente del broker de esa posición u orden (MEXC si no dice nada)."""
+        return self._cliente_de((objeto or {}).get("_exchange") or defecto)
+
+    def _aviso_bitunix(self, que):
+        self.port.show(
+            "Bitunix",
+            f"{que} en Bitunix llega en el próximo paso.\n\n"
+            "Ya funcionan: abrir, cerrar, cerrar todo y cancelar órdenes.",
+        )
+
+    def abrir(self, side, form, al_enviar=None, exchange="mexc"):
         """Confirma y envía la orden de la tarjeta (mercado o límite)."""
         price = form.get("price")
         px = price or self.session.precios.get(form["symbol"], 0)
@@ -68,15 +96,18 @@ class Control:
             return
         if al_enviar:
             al_enviar()
-        threading.Thread(target=self._do_abrir, args=(side, form, dry), daemon=True).start()
+        threading.Thread(
+            target=self._do_abrir, args=(side, form, dry, exchange), daemon=True
+        ).start()
 
-    def _do_abrir(self, side, form, dry):
+    def _do_abrir(self, side, form, dry, exchange="mexc"):
         symbol = form["symbol"]
+        mx = self._cliente_de(exchange)
         try:
             precio = form.get("price")
             if dry:
-                px = precio or self.mx.price(symbol)
-                vol = self.mx.size_to_vol(symbol, form["notional"], px)
+                px = precio or mx.price(symbol)
+                vol = mx.size_to_vol(symbol, form["notional"], px)
                 mensaje = (
                     f"DRY-RUN {side} {t.fmt_qty(vol)} contratos @ {t.fmt_price(px)} (no enviado)"
                 )
@@ -94,7 +125,7 @@ class Control:
                     )
                 )
                 return
-            data, vol, px = self.mx.open_market(
+            data, vol, px = mx.open_market(
                 symbol,
                 side,
                 form["notional"],
@@ -129,11 +160,13 @@ class Control:
         info = info or {}
         pct = float(info.get("pct") or 100)
         price = info.get("price") or None
-        vol = close_vol(pos.get("holdVol"), pct)
-        if vol < 1:
+        paso = float(pos.get("_qtyStep") or 1.0)
+        vol = volumen_cerrar(pos.get("holdVol"), pct, paso)
+        if vol <= 0:
+            unidad = "contratos" if (pos.get("_exchange") or "mexc") == "mexc" else "monedas"
             self.port.show(
                 "Cantidad invalida",
-                f"Ese {pct:.0f}% deja 0 contratos: la posicion tiene "
+                f"Ese {pct:.0f}% deja 0 {unidad}: la posicion tiene "
                 f"{t.fmt_qty(pos.get('holdVol'))}. Sube el porcentaje.",
             )
             return
@@ -180,7 +213,9 @@ class Control:
         single = len(positions) == 1  # solo el cierre de una fila lleva vol/precio
         for i, pos in enumerate(positions):
             try:
-                self.mx.close_position(pos, vol if single else None, price if single else None)
+                self.broker_de(pos).close_position(
+                    pos, vol if single else None, price if single else None
+                )
                 done += 1
                 self.session.log(
                     f"OK  cerrada {pos.get('symbol')} vol={vol or pos.get('holdVol')}"
@@ -216,7 +251,7 @@ class Control:
 
         def run():
             try:
-                self.mx.reverse(pos)
+                self.broker_de(pos).reverse(pos)
                 self.session.log(f"OK  reverse {pos.get('symbol')} vol={pos.get('holdVol')}")
                 self.q.put(("closed", f"Revertida {pos.get('symbol')}"))
             except Exception as e:
@@ -240,13 +275,18 @@ class Control:
             return
 
         def run():
-            try:
-                self.mx.close_all()
-                self.session.log("OK  close_all")
+            fallos = []
+            for nombre, cliente in self._brokers():
+                try:
+                    cliente.close_all()
+                    self.session.log(f"OK  close_all {nombre}")
+                except Exception as e:
+                    fallos.append(f"{nombre}: {e}")
+                    self.session.log(f"ERR close_all {nombre}: {e}")
+            if fallos:
+                self.q.put(("closed", " | ".join(fallos)))
+            else:
                 self.q.put(("closed", "Todas las posiciones cerradas"))
-            except Exception as e:
-                self.session.log(f"ERR close_all: {e}")
-                self.q.put(("closed", f"Error: {e}"))
             self.session.refresh_positions()
 
         threading.Thread(target=run, daemon=True).start()
@@ -274,36 +314,37 @@ class Control:
 
     def _tpsl_worker(self, pos, tp, sl, es_be=False):
         symbol = pos.get("symbol")
+        mx = self.broker_de(pos)
         try:
-            price = self.mx.price(symbol)
+            price = mx.price(symbol)
             long_ = int(pos.get("positionType") or 1) == 1
             if es_be and sl and (sl > price if long_ else sl < price):
                 # sin esta guarda plan_tp_sl lo guardaria como TP
                 raise MexcError(
                     "El precio se movio y el break-even ya no cubre las comisiones. Reintenta."
                 )
-            # MEXC mide la direccion contra el precio actual, no contra la entrada
+            # el TP/SL se mide contra el precio actual, no contra la entrada
             tp, sl, avisos = plan_tp_sl(long_, price, tp, sl)
             # se cancelan TODOS los stop de la posicion: un id viejo deja duplicados
             ids = [
                 o.get("id")
-                for o in self.mx.tpsl_list()
+                for o in mx.tpsl_list()
                 if int(o.get("positionId") or 0) == int(pos["positionId"])
             ]
             for stop_id in [i for i in ids if i]:
                 try:
-                    self.mx.tpsl_cancel(stop_id)
+                    mx.tpsl_cancel(stop_id, simbolo=pos.get("symbol"))
                 except MexcError as e:
                     if "ya no existe" not in str(e):
                         raise
             # el cancel es asincrono: recolocar de inmediato da 5004
-            if ids and not self._wait_tpsl_clear(pos["positionId"]):
+            if ids and not self._wait_tpsl_clear(mx, pos["positionId"]):
                 raise MexcError(
-                    "MEXC todavia esta cancelando la orden anterior. Reintenta en un segundo."
+                    "El broker todavía está cancelando la orden anterior. Reintenta en un segundo."
                 )
             if tp or sl:
-                self.mx.tpsl_place(pos["positionId"], pos["holdVol"], tp, sl)
-            self.session.log(f"OK  tpsl {symbol} tp={tp} sl={sl}")
+                mx.tpsl_place(pos["positionId"], pos["holdVol"], tp, sl, simbolo=pos.get("symbol"))
+            self.session.log(f"OK  tpsl {symbol} tp={tp} sl={sl} ({pos.get('_exchange')})")
             msg = f"TP/SL actualizado · {symbol}"
             self.q.put(("closed", msg))
             if avisos:
@@ -314,15 +355,13 @@ class Control:
             self.q.put(("notice", ("TP / SL rechazado", str(e), True)))
         self.session.refresh_positions()
 
-    def _wait_tpsl_clear(self, position_id, timeout=2.5):
-        """Espera a que MEXC suelte el TP/SL cancelado de esa posicion."""
+    def _wait_tpsl_clear(self, mx, position_id, timeout=2.5):
+        """Espera a que el broker suelte el TP/SL cancelado de esa posicion."""
         end = time.time() + timeout
         while time.time() < end:
             try:
                 pendientes = [
-                    o
-                    for o in self.mx.tpsl_list()
-                    if int(o.get("positionId") or 0) == int(position_id)
+                    o for o in mx.tpsl_list() if int(o.get("positionId") or 0) == int(position_id)
                 ]
             except Exception:
                 pendientes = []
@@ -352,7 +391,9 @@ class Control:
         ):
             return
         threading.Thread(
-            target=self._cancel_worker, args=([order.get("orderId")],), daemon=True
+            target=self._cancel_varios,
+            args=({order.get("_exchange") or "mexc": [order.get("orderId")]},),
+            daemon=True,
         ).start()
 
     def cancelar_todo(self, orders):
@@ -375,17 +416,29 @@ class Control:
             ok="Cancelar todas",
         ):
             return
-        threading.Thread(
-            target=self._cancel_worker,
-            args=([o.get("orderId") for o in orders],),
-            daemon=True,
-        ).start()
+        grupos = {}
+        for orden in orders:
+            grupos.setdefault(orden.get("_exchange") or "mexc", []).append(orden.get("orderId"))
+        threading.Thread(target=self._cancel_varios, args=(grupos,), daemon=True).start()
+
+    def _cancel_varios(self, grupos):
+        """Cancela por broker: Bitunix necesita el símbolo y MEXC no."""
+        for nombre, ids in grupos.items():
+            cliente = self._cliente_de(nombre)
+            try:
+                cliente.cancel(ids)
+                self.session.log(f"OK  canceladas {nombre} {ids}")
+            except Exception as exc:
+                self.session.log(f"ERR cancelar {nombre}: {exc}")
+                self.q.put(("closed", f"Error al cancelar en {nombre}: {exc}"))
+        self.session.refresh_orders()
 
     def modificar(self, order):
-        """Editar una orden. MEXC no deja modificarla: se cancela y se reenvía.
+        """Editar una orden.
 
-        Reenviar es abrir una orden, así que DRY-RUN lo frena. La orden de cierre
-        (lado 2/4) no se puede reenviar así: solo cancelar.
+        MEXC no deja modificarla: se cancela y se reenvía. Bitunix tiene
+        `modify_order` nativo, así que ahí se cambia en el lugar (sin ventana de
+        riesgo). Reenviar es abrir una orden: DRY-RUN lo frena.
         """
         if not es_editable(order):
             self.port.status("Una orden de cierre solo se puede cancelar.")
@@ -394,14 +447,18 @@ class Control:
             self.port.status("DRY-RUN: no se reenvía la orden modificada")
             return
         symbol = order.get("symbol")
-        contract = self.session.contract_for(symbol)
+        cliente = self.broker_de(order)
+        if (order.get("_exchange") or "mexc") == "bitunix":
+            contract = cliente.contract(symbol)
+        else:
+            contract = self.session.contract_for(symbol)
         if not contract:
             self.port.status(f"Falta el contrato de {symbol}: espera a que cargue el catálogo.")
             return
 
         def to_vol(notional, price):
             # contrato ya cacheado: el editor no pide nada a la red
-            return self.mx.size_to_vol(symbol, notional, price, contract)
+            return cliente.size_to_vol(symbol, notional, price, contract)
 
         form = self.port.editar_orden(order, contract, to_vol)
         if not form:
@@ -410,24 +467,32 @@ class Control:
 
     def _replace_worker(self, order, form):
         symbol = order.get("symbol")
+        cliente = self.broker_de(order)
+        es_bnx = (order.get("_exchange") or "mexc") == "bitunix"
         try:
-            self.mx.cancel([order["orderId"]])
-            # el cancel es asincrono: reenviar de inmediato puede tocar el margen
-            # que MEXC todavia tiene reservado para la orden vieja
-            if not self._wait_order_gone(order["orderId"]):
-                raise MexcError(
-                    "MEXC todavía no liberó la orden anterior. Reintenta en un segundo."
+            if es_bnx:
+                # nativo: no hay ventana entre cancelar y reenviar
+                cliente.modify_order(order, form)
+                self.session.log(f"OK  modificada {symbol} (bitunix) vol={form['vol']}")
+                self.q.put(("closed", f"Orden modificada · {symbol}"))
+            else:
+                cliente.cancel([order["orderId"]])
+                # el cancel es asincrono: reenviar de inmediato puede tocar el margen
+                # que el broker todavia tiene reservado para la orden vieja
+                if not self._wait_order_gone(order["orderId"]):
+                    raise MexcError(
+                        "El broker todavía no liberó la orden anterior. Reintenta en un segundo."
+                    )
+                cliente.open_market(
+                    symbol,
+                    form["side"],
+                    form["notional"],
+                    form["lev"],
+                    int(order.get("openType") or 1),
+                    form["tp"],
+                    form["sl"],
+                    form["price"],
                 )
-            self.mx.open_market(
-                symbol,
-                form["side"],
-                form["notional"],
-                form["lev"],
-                int(order.get("openType") or 1),
-                form["tp"],
-                form["sl"],
-                form["price"],
-            )
             self.session.log(
                 f"OK  reenviada {symbol} {form['side']} vol={form['vol']} "
                 f"px={form['price']} lev={form['lev']} mrg={form['margin']}"
@@ -501,7 +566,14 @@ class Control:
 
     def _margin_worker(self, pos, amount):
         try:
-            self.mx.change_margin(pos["positionId"], amount, "ADD")
+            cliente = self.broker_de(pos)
+            cliente.change_margin(
+                pos["positionId"],
+                amount,
+                "ADD",
+                simbolo=pos.get("symbol"),
+                side=int(pos.get("positionType") or 1) == 1,
+            )
             self.session.log(f"OK  margen +{amount} {pos.get('symbol')}")
             self.q.put(("closed", f"Margen añadido · {pos.get('symbol')}"))
         except Exception as e:

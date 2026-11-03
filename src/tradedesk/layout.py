@@ -23,14 +23,18 @@ POS_COLS = (
 PENCIL_GUTTER = 24
 PENCIL_COLS = {"margen", "tpsl"}
 
-HIST_COLS = (
-    ("fecha", "Fecha", 142, "w"),
-    ("par", "Par", 126, "w"),
-    ("tipo", "Tipo", 92, "w"),
-    ("qty", "Qty", 90, "e"),
-    ("precio", "Precio", 112, "e"),
+# Historial agrupado: una fila por operación (apertura + cierres juntos)
+OPER_COLS = (
+    ("apertura", "Apertura", 142, "w"),
+    ("cierre", "Cierre", 142, "w"),
+    ("par", "Par", 132, "w"),
+    ("lado", "Lado", 74, "w"),
+    ("qty", "Tamaño", 104, "e"),
+    ("entrada", "Entrada", 110, "e"),
+    ("salida", "Salida", 110, "e"),
     ("pnl", "PnL", 118, "e"),
-    ("fee", "Fee", 94, "e"),
+    ("fee", "Fee", 104, "e"),
+    ("neto", "Neto", 118, "e"),
     ("estado", "Estado", 106, "w"),
 )
 

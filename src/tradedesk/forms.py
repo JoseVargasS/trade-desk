@@ -4,10 +4,31 @@ Sin widgets: así la validación se prueba sin abrir ventanas y la vista solo
 pasa los textos tal cual los escribió el usuario.
 """
 
+import math
+
 
 def _numero(texto):
     texto = "" if texto is None else str(texto).strip()
     return float(texto.replace(",", ""))
+
+
+def volumen_cerrar(hold, pct, paso=1.0):
+    """Cantidad a cerrar con ese %.
+
+    El `paso` es 1 en MEXC (contratos enteros) y el `qtyStep` del par en Bitunix
+    (0.0001 BTC), así el cierre parcial no se va a 0 con posiciones chicas.
+    100 % devuelve la posición exacta: un cierre total no puede fallar por redondeo.
+    """
+    total = float(hold or 0)
+    if total <= 0:
+        return 0.0
+    if float(pct or 0) >= 100:
+        return total
+    paso = float(paso or 1.0)
+    if paso <= 0:
+        paso = 1.0
+    pasos = math.floor(total * float(pct) / 100.0 / paso)
+    return round(pasos * paso, 8)
 
 
 def form_tarjeta(symbol, palanca, tamano, tp, sl, margin_mode, size_mode, limite):

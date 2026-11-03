@@ -11,8 +11,8 @@ import queue
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QMainWindow,
     QScrollArea,
     QTableWidget,
@@ -34,7 +35,7 @@ from .. import theme as t
 from ..controller import Control
 from ..layout import (
     ACTION_W,
-    HIST_COLS,
+    OPER_COLS,
     ORDER_ACTION_W,
     ORDER_COLS,
     ORDER_PENCILS,
@@ -42,18 +43,18 @@ from ..layout import (
     PENCIL_COLS,
     POS_COLS,
     ROW_H,
-    SIDES,
     STATES,
 )
 from ..mexc import fee_desglose
+from ..paths import ASSETS
 from ..session import Session
 from . import dialogs
-from .cells import DelegadoCeldas, icono_lapiz, lineas
+from .cells import DETALLE, SUBRAYADO, Bocadillo, DelegadoCeldas, icono_lapiz, lineas
 from .dialogs import QtPort
 from .search import buscar
+from .style import barra_oscura, fnt, logo, qss
 from .style import boton as _boton
 from .style import etiqueta as _etiqueta
-from .style import qss
 from .tarjeta import BarraCierre, Tarjeta
 
 PRESETS = (1, 5, 10, 15, 20, 50)
@@ -87,6 +88,85 @@ def _tabla(columnas, alto_fila):
     return tabla
 
 
+class CeldaLapiz(QWidget):
+    """Valor(es) + lapiz, actualizable en sitio (no se recrea en cada refresco)."""
+
+    def __init__(self, partes, accion, fondo, vertical=False):
+        super().__init__()
+        self._accion = accion
+        self.setStyleSheet(f"background: {fondo};")
+        fila = QHBoxLayout(self)
+        fila.setContentsMargins(6, 0, 6, 0)
+        fila.setSpacing(4)
+        fila.addStretch(1)
+        caja = QWidget()
+        self._caja = (QVBoxLayout if vertical else QHBoxLayout)(caja)
+        self._caja.setContentsMargins(0, 0, 0, 0)
+        self._caja.setSpacing(0)
+        self._etiquetas = []
+        fila.addWidget(caja)
+        lapiz = QToolButton()
+        lapiz.setIcon(QIcon(icono_lapiz(t.MUTED)))
+        lapiz.setIconSize(QSize(16, 16))
+        lapiz.setCursor(Qt.PointingHandCursor)
+        lapiz.setStyleSheet("QToolButton { border: 0; background: transparent; }")
+        lapiz.clicked.connect(lambda: self._accion())
+        fila.addWidget(lapiz)
+        self.set_partes(partes)
+
+    def set_partes(self, partes):
+        """Crea las etiquetas que falten: la celda puede pasar de 1 valor a 3."""
+        while len(self._etiquetas) < len(partes):
+            _texto, size, _negrita, _color = partes[len(self._etiquetas)]
+            etiqueta = _etiqueta("", size)
+            etiqueta.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self._caja.addWidget(etiqueta)
+            self._etiquetas.append(etiqueta)
+        for indice, etiqueta in enumerate(self._etiquetas):
+            if indice < len(partes):
+                texto, size, negrita, color = partes[indice]
+                etiqueta.setText(str(texto))
+                etiqueta.setFont(fnt(size, negrita))
+                etiqueta.setStyleSheet(f"color: {color}; background: transparent;")
+                etiqueta.show()
+            else:
+                etiqueta.hide()
+
+    def set_accion(self, accion):
+        """Se reasigna en cada refresco: la celda no puede quedarse con el dato viejo."""
+        self._accion = accion
+
+
+class CeldaPar(QWidget):
+    """Par y broker: el nombre arriba y el wordmark del broker debajo."""
+
+    def __init__(self, nombre, exchange, fondo, compacta=False):
+        super().__init__()
+        self.setStyleSheet(f"background: {fondo};")
+        self._compacta = bool(compacta)
+        alto = 2 if compacta else 8
+        columna = QVBoxLayout(self)
+        columna.setContentsMargins(6, alto, 6, 2 if compacta else 6)
+        columna.setSpacing(0 if compacta else 1)
+        self.lbl_nombre = _etiqueta(nombre, 12 if compacta else 13, True)
+        columna.addWidget(self.lbl_nombre)
+        self.lbl_marca = QLabel()
+        self.lbl_marca.setStyleSheet("background: transparent;")
+        columna.addWidget(self.lbl_marca)
+        columna.addStretch(1)
+        self.set_datos(nombre, exchange)
+
+    def set_datos(self, nombre, exchange):
+        self.lbl_nombre.setText(str(nombre))
+        alto = 10 if self._compacta else 12
+        imagen = logo(exchange, alto, completo=True) if exchange else QPixmap()
+        if imagen.isNull():
+            self.lbl_marca.hide()
+            return
+        self.lbl_marca.setPixmap(imagen)
+        self.lbl_marca.show()
+
+
 class VistaQt(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -95,6 +175,15 @@ class VistaQt(QMainWindow):
         self._posiciones = []
         self._ordenes = []
         self._tarjetas = {}
+        self._ultimo_error = ""
+        self._fondos = {}
+        self._firma_pos = ()
+        self._arrastrada = None
+        self._desfase = QPoint()
+        self._destino = None
+        self._cartas = []
+        self._anims = {}
+        self._lienzo = None
         self._tarjeta_enviando = None
         self._avisos = []
         self._mostrando = False
@@ -133,12 +222,54 @@ class VistaQt(QMainWindow):
             return
         creds.save("mexc", *got)
         self.session.mx = Mexc(*got)
+        self.session.hay["mexc"] = True
         self.statusBar().showMessage("Key guardada. Listo para operar.")
         threading.Thread(target=self.session.refresh_positions, daemon=True).start()
 
     def closeEvent(self, evento):
         self.session.stop()
         super().closeEvent(evento)
+
+    # ------------------------------------------------------------------ brokers
+    def _pintar_saldos(self, saldos):
+        """USDT disponible de cada broker, en la cabecera."""
+        partes = []
+        for nombre, titulo in (("mexc", "MEXC"), ("bitunix", "Bitunix")):
+            if self.session.cliente(nombre) is None:
+                continue
+            partes.append(f"{titulo} {t.fmt_usdt(saldos.get(nombre) or 0)}")
+        self._lbl_saldo.setText(" · ".join(partes) + " USDT" if partes else "— USDT")
+
+    def _abrir_brokers(self):
+        from .. import creds
+
+        saldos = self.session.saldos
+        filas = [
+            ("mexc", "MEXC", bool(creds.load("mexc")[0]), saldos.get("mexc") or 0),
+            ("bitunix", "Bitunix", bool(creds.load("bitunix")[0]), saldos.get("bitunix") or 0),
+        ]
+        dialogs.brokers(self, filas, self._cargar_claves)
+
+    def _cargar_claves(self, nombre):
+        from .. import creds
+        from ..bitunix import Bitunix
+        from ..mexc import Mexc
+
+        if nombre == "bitunix":
+            got = dialogs.ask_key(self, lambda k, s: Bitunix(k, s).positions())
+        else:
+            got = dialogs.ask_key(self, lambda k, s: Mexc(k, s).positions())
+        if not got:
+            return
+        creds.save(nombre, *got)
+        if nombre == "bitunix":
+            self.session.bitunix = Bitunix(*got)
+        else:
+            self.session.mx = Mexc(*got)
+        self.session.hay[nombre] = True
+        self.statusBar().showMessage(f"Claves de {nombre} guardadas.")
+        threading.Thread(target=self.session.refresh_positions, daemon=True).start()
+        self._abrir_brokers()
 
     # ------------------------------------------------------------- construccion
     def _cabecera(self):
@@ -147,10 +278,22 @@ class VistaQt(QMainWindow):
         cabecera.setAttribute(Qt.WA_StyledBackground, True)
         fila = QHBoxLayout(cabecera)
         fila.setContentsMargins(12, 8, 12, 8)
+        icono = QLabel()
+        pixmap = QPixmap(str(ASSETS / "icon.png"))
+        if not pixmap.isNull():
+            icono.setPixmap(pixmap.scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        icono.setStyleSheet("background: transparent;")
+        fila.addWidget(icono)
+        fila.addSpacing(8)
         fila.addWidget(_etiqueta("TRADE DESK", 14, True))
-        fila.addSpacing(16)
-        fila.addWidget(_etiqueta("Qt", 11, muted=True))
         fila.addStretch(1)
+        brokers_btn = _boton("Brokers", 78, 22, size=10)
+        brokers_btn.clicked.connect(self._abrir_brokers)
+        fila.addWidget(brokers_btn)
+        fila.addSpacing(10)
+        self._lbl_saldo = _etiqueta("— USDT", 11, muted=True)
+        fila.addWidget(self._lbl_saldo)
+        fila.addSpacing(10)
         self._lbl_ip = _etiqueta("IP —", 11, muted=True)
         fila.addWidget(self._lbl_ip)
         copiar = _boton("Copiar IP", 74, 22, size=10)
@@ -174,8 +317,10 @@ class VistaQt(QMainWindow):
             self._notificar("Catálogo", "Todavía se está cargando el catálogo de MEXC.")
             return
         symbol = buscar(self, self.session.mercados)
-        if symbol and not self.session.add_card(symbol):
-            self.statusBar().showMessage(f"{symbol} ya esta en pantalla.")
+        if not symbol:
+            return
+        self.session.add_card(symbol)
+        self.statusBar().showMessage(f"{symbol} añadido · elegí el broker en la tarjeta.")
 
     def _cambio_dry(self, activo):
         self._dry = bool(activo)
@@ -187,6 +332,11 @@ class VistaQt(QMainWindow):
             else "REAL · las órdenes se envían"
         )
 
+    # --------------------------------------------------------- fila de tarjetas
+    TARJETA_W = 286
+    TARJETA_GAP = 10
+    ANIM_MS = 150
+
     def _armar_deck(self):
         deck = QScrollArea()
         deck.setWidgetResizable(True)
@@ -196,16 +346,90 @@ class VistaQt(QMainWindow):
         fila = QHBoxLayout(contenido)
         fila.setContentsMargins(0, 0, 0, 0)
         fila.setSpacing(10)
-        self._fila_tarjetas = QHBoxLayout()
-        self._fila_tarjetas.setContentsMargins(0, 0, 0, 0)
-        self._fila_tarjetas.setSpacing(10)
-        self._fila_tarjetas.addStretch(1)
-        fila.addLayout(self._fila_tarjetas, 1)
+        # las tarjetas se colocan a mano: así el arrastre anima cada una por separado
+        self._lienzo = QWidget()
+        self._lienzo.setFixedHeight(436)
+        fila.addWidget(self._lienzo, 0, Qt.AlignTop)
+        fila.addStretch(1)
         agregar = _boton("+ Añadir par", 120, 34)
         agregar.clicked.connect(self._añadir_par)
         fila.addWidget(agregar, 0, Qt.AlignTop)
         deck.setWidget(contenido)
         return deck
+
+    def _paso(self):
+        return self.TARJETA_W + self.TARJETA_GAP
+
+    def _ubicar(self, animar=True, saltar=None):
+        """Coloca cada tarjeta en su slot (animando si se pide)."""
+        paso = self._paso()
+        for indice, carta in enumerate(self._cartas):
+            if carta is saltar:
+                continue
+            destino = QPoint(indice * paso, 0)
+            if animar:
+                self._animar_carta(carta, destino)
+            else:
+                self._detener(carta)
+                carta.move(destino)
+        self._lienzo.setMinimumWidth(max(1, len(self._cartas) * paso - self.TARJETA_GAP))
+
+    def _animar_carta(self, carta, destino):
+        self._detener(carta)
+        anim = QPropertyAnimation(carta, b"pos", self)
+        anim.setDuration(self.ANIM_MS)
+        anim.setStartValue(carta.pos())
+        anim.setEndValue(destino)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.start()
+        self._anims[carta] = anim
+
+    def _detener(self, carta):
+        anim = self._anims.pop(carta, None)
+        if anim is not None:
+            anim.stop()
+
+    def _indice_destino(self, tarjeta):
+        """Slot donde caería: cuántas tarjetas quedan a la izquierda de su centro."""
+        centro = tarjeta.x() + tarjeta.width() // 2
+        paso = self._paso()
+        indice = 0
+        for carta in self._cartas:
+            if carta is tarjeta:
+                continue
+            if centro > indice * paso + self.TARJETA_W // 2:
+                indice += 1
+            else:
+                break
+        return indice
+
+    def _arrastre_tarjeta(self, tarjeta, accion, punto=None):
+        """Arrastre en vivo sin hueco.
+
+        La tarjeta agarrada sigue al cursor (queda por encima) y las demás se
+        animan a su slot nuevo, como si la primera las empujara.
+        """
+        if accion == "inicio":
+            self._arrastrada = tarjeta
+            self._desfase = punto  # punto donde se agarró, en coords de la tarjeta
+            self._destino = self._cartas.index(tarjeta) if tarjeta in self._cartas else 0
+            tarjeta.raise_()
+        elif accion == "mover" and self._arrastrada is not None:
+            local = self._lienzo.mapFromGlobal(punto)
+            tarjeta.move(local - self._desfase)
+            destino = self._indice_destino(tarjeta)
+            if destino != self._destino:
+                self._destino = destino
+                otras = [c for c in self._cartas if c is not tarjeta]
+                otras.insert(min(destino, len(otras)), tarjeta)
+                self._cartas = otras
+                self._ubicar(animar=True, saltar=tarjeta)
+        elif accion == "fin" and self._arrastrada is not None:
+            self._animar_carta(tarjeta, QPoint(self._destino * self._paso(), 0))
+            self.session.mover_tarjeta(tarjeta.tarjeta["id"], self._destino)
+            self._arrastrada = None
+            self._destino = None
+            self.statusBar().showMessage("Orden de las tarjetas guardado.")
 
     def _armar_pestanas(self):
         self._tabs = QTabWidget()
@@ -226,6 +450,11 @@ class VistaQt(QMainWindow):
         barra_pos.addWidget(todo)
         col_pos.addLayout(barra_pos)
         self._tabla_pos = self._tabla_posiciones()
+        self._col_fee = 1 + next(i for i, col in enumerate(POS_COLS) if col[0] == "fee")
+        self._tabla_pos.viewport().setMouseTracking(True)
+        self._tabla_pos.entered.connect(self._hover_posiciones)
+        self._tabla_pos.viewport().installEventFilter(self)
+        self._bocadillo = Bocadillo(self)
         col_pos.addWidget(self._tabla_pos, 1)
 
         ordenes = QWidget()
@@ -248,7 +477,16 @@ class VistaQt(QMainWindow):
         historial = QWidget()
         col_hist = QVBoxLayout(historial)
         col_hist.setContentsMargins(0, 0, 0, 0)
-        self._tabla_hist = _tabla(HIST_COLS, 38)
+        col_hist.setSpacing(6)
+        barra_hist = QHBoxLayout()
+        self._lbl_hist = _etiqueta("Historial", 11, muted=True)
+        barra_hist.addWidget(self._lbl_hist)
+        barra_hist.addStretch(1)
+        self._btn_mas = _boton("Ver más", 110, 26)
+        self._btn_mas.clicked.connect(self._pedir_mas_historial)
+        barra_hist.addWidget(self._btn_mas)
+        col_hist.addLayout(barra_hist)
+        self._tabla_hist = _tabla(OPER_COLS, 38)
         col_hist.addWidget(self._tabla_hist, 1)
         self._tabs.addTab(historial, "Historial")
         self._tabs.currentChanged.connect(self._cambio_pestana)
@@ -288,11 +526,21 @@ class VistaQt(QMainWindow):
                 break
             tipo = mensaje[0]
             if tipo == "error":
-                self._notificar("Error", mensaje[1], danger=True)
+                # los errores del poller (tipico: 510 Demasiadas peticiones) van a la
+                # barra de estado: un modal por cada reintento tapa la app entera
+                if mensaje[1] != self._ultimo_error:
+                    self._ultimo_error = mensaje[1]
+                    self.statusBar().showMessage(mensaje[1], 8000)
             elif tipo == "cards":
                 self._pintar_deck(mensaje[1])
             elif tipo == "ticker":
-                self._actualizar_precio(mensaje[1], mensaje[2])
+                self._actualizar_precio(*mensaje[1:])
+            elif tipo == "balances":
+                self._pintar_saldos(mensaje[1])
+            elif tipo == "funding":
+                # tasa y hora del próximo funding: cambia lento, se guarda y se usa
+                # en el globo de la fee del siguiente refresco (3 s)
+                self._fondos = mensaje[1]
             elif tipo == "positions":
                 self._posiciones = mensaje[1]
                 self._pintar_posiciones(self._posiciones)
@@ -307,6 +555,9 @@ class VistaQt(QMainWindow):
                 self._orden_terminada(*mensaje[1])
             elif tipo == "history":
                 self._pintar_historial(mensaje[1])
+            elif tipo == "history_mas":
+                self._btn_mas.setEnabled(bool(mensaje[1]))
+                self._btn_mas.setText("Ver más" if mensaje[1] else "Sin más")
             elif tipo == "ip":
                 self._lbl_ip.setText(f"IP {mensaje[1]}")
         # un modal dentro de _drenar congela el refresco: se abre al volver al bucle
@@ -347,33 +598,91 @@ class VistaQt(QMainWindow):
             self._tarjeta_enviando = tarjeta
             tarjeta.set_busy(True)
 
-        self.control.abrir(side, form, al_enviar=enviar)
+        self.control.abrir(side, form, al_enviar=enviar, exchange=tarjeta.broker())
 
-    def _actualizar_precio(self, symbol, precio):
-        tarjeta = self._tarjetas.get(symbol)
+    def _actualizar_precio(self, ident, precio, cambio=0.0):
+        tarjeta = self._tarjetas.get(ident)
         if tarjeta is not None:
-            tarjeta.set_precio(precio)
+            tarjeta.set_precio(precio, cambio)
         self.statusBar().showMessage(f"{len(self._posiciones)} posiciones abiertas")
 
+    def _posicion(self, fila):
+        """La posicion viva de esa fila (la que llego en el ultimo refresco)."""
+        if 0 <= fila < len(self._posiciones):
+            return self._posiciones[fila]
+        return None
+
+    def _editar_tpsl(self, fila):
+        pos = self._posicion(fila)
+        if pos:
+            self.control.tpsl(pos)
+
+    def _editar_margen(self, fila):
+        pos = self._posicion(fila)
+        if pos:
+            self.control.margen(pos)
+
+    # ------------------------------------------------------------------ tooltip
+    def _hover_posiciones(self, indice):
+        """Globo de la fee al entrar en la celda, arriba y apuntando a la celda."""
+        if indice.column() != self._col_fee:
+            self._bocadillo.hide()
+            return
+        item = self._tabla_pos.item(indice.row(), indice.column())
+        filas = item.data(DETALLE) if item else None
+        if not filas:
+            self._bocadillo.hide()
+            return
+        caja = self._tabla_pos.visualRect(indice)
+        vista = self._tabla_pos.viewport()
+        arriba = vista.mapToGlobal(caja.topLeft())
+        ancla = QPoint(arriba.x() + caja.width() // 2, arriba.y())
+        self._bocadillo.mostrar(ancla, "Fee de la posición", filas)
+
+    def eventFilter(self, objeto, evento):
+        if evento.type() == QEvent.Leave and objeto is self._tabla_pos.viewport():
+            self._bocadillo.hide()
+        return super().eventFilter(objeto, evento)
+
+    def showEvent(self, evento):
+        super().showEvent(evento)
+        # la barra de titulo solo se pinta oscura si DWM repinta el marco ahora
+        barra_oscura(self)
+
     def _pintar_deck(self, tarjetas):
-        while self._fila_tarjetas.count() > 1:
-            elemento = self._fila_tarjetas.takeAt(0)
-            if elemento.widget():
-                elemento.widget().deleteLater()
+        for viejo in self._lienzo.findChildren(QWidget):
+            viejo.deleteLater()
         self._tarjetas = {}
+        self._cartas = []
+        self._anims = {}
+        self._arrastrada = None
+        self._destino = None
+        clientes = {"mexc": self.session.mx, "bitunix": self.session.bitunix}
         for tarjeta in tarjetas:
             widget = Tarjeta(
                 tarjeta,
-                self.session.mx,
+                clientes,
                 on_trade=self._trade,
                 on_remove=self._quitar_par,
+                on_broker=self._cambio_broker,
+                on_arrastre=self._arrastre_tarjeta,
             )
-            self._tarjetas[tarjeta["symbol"]] = widget
-            self._fila_tarjetas.insertWidget(self._fila_tarjetas.count() - 1, widget)
+            widget.setParent(self._lienzo)
+            widget.show()
+            self._tarjetas[tarjeta["id"]] = widget
+            self._cartas.append(widget)
+        self._ubicar(animar=False)
 
-    def _quitar_par(self, symbol):
-        self.session.remove_card(symbol)
-        self._tarjetas.pop(symbol, None)
+    def _cambio_broker(self, tarjeta, nombre):
+        ident = tarjeta.tarjeta["id"]
+        self.session.set_exchange(ident, nombre)
+        self.statusBar().showMessage(
+            f"{tarjeta.tarjeta['symbol']} ahora opera en {nombre.upper()}."
+        )
+
+    def _quitar_par(self, ident):
+        self.session.remove_card(ident)
+        self._tarjetas.pop(ident, None)
 
     def _seleccionadas(self):
         elegidas = []
@@ -389,163 +698,223 @@ class VistaQt(QMainWindow):
         self.control.cerrar_seleccionadas(self._seleccionadas())
 
     # --------------------------------------------------------------- posiciones
-    def _pintar_posiciones(self, posiciones):
-        tabla = self._tabla_pos
-        marcadas = {p.get("positionId") for p in self._seleccionadas()}
-        tabla.setRowCount(len(posiciones))
-        for fila, position in enumerate(posiciones):
-            largo = int(position.get("positionType") or 1) == 1
-            cantidad = float(position.get("holdVol") or 0)
-            entrada = float(position.get("holdAvgPrice") or 0)
-            pnl = float(position.get("unRealizedPnl") or 0)
-            tamano = float(position.get("_contractSize") or 0)
-            escala = max(2, int(position.get("_priceScale") or 2))
-            marca = entrada + (pnl / (cantidad * tamano)) * (1 if largo else -1) if cantidad else 0
-            nocional = cantidad * tamano * marca
-            detalle = fee_desglose(position)
-            proporcion = float(position.get("im") or 0)
-            ratio = float(position.get("marginRatio") or 0) * 100
+    def _valores_fila(self, position):
+        """Datos de cada celda de una posicion: los pinta el delegado o el widget."""
+        largo = int(position.get("positionType") or 1) == 1
+        cantidad = float(position.get("holdVol") or 0)
+        entrada = float(position.get("holdAvgPrice") or 0)
+        pnl = float(position.get("unRealizedPnl") or 0)
+        tamano = float(position.get("_contractSize") or 0)
+        escala = max(2, int(position.get("_priceScale") or 2))
+        marca = entrada + (pnl / (cantidad * tamano)) * (1 if largo else -1) if cantidad else 0
+        nocional = cantidad * tamano * marca
+        detalle = fee_desglose(position)
+        proporcion = float(position.get("im") or 0)
+        ratio = float(position.get("marginRatio") or 0) * 100
+        valores = {
+            "par": lineas((position.get("_name") or position.get("symbol", ""), 13, True, t.TEXT)),
+            "lado": lineas(
+                (
+                    f"{position.get('leverage', '')}X {'LONG' if largo else 'SHORT'}",
+                    13,
+                    True,
+                    t.GREEN if largo else t.RED,
+                )
+            ),
+            "apertura": lineas((_cuando(position.get("createTime")), 13, False, t.MUTED)),
+            "pos": lineas((f"{t.fmt_usdt(nocional)} USDT", 13, True, t.TEXT)),
+            "entrada": lineas((t.fmt_price_exact(entrada, escala), 13, False, t.TEXT)),
+            "mark": lineas(
+                (
+                    t.fmt_price_exact(marca, escala),
+                    13,
+                    False,
+                    t.GREEN if (marca > entrada) == largo else t.RED,
+                )
+            ),
+            "liq": lineas(
+                (
+                    t.fmt_price_exact(float(position.get("liquidatePrice") or 0), escala),
+                    13,
+                    False,
+                    t.GOLD,
+                )
+            ),
+            "ratio": lineas(
+                (
+                    f"{ratio:.2f}%" if ratio else "—",
+                    13,
+                    False,
+                    t.GOLD if ratio >= 20 else t.TEXT,
+                )
+            ),
+            "margen": lineas((f"{t.fmt_usdt(proporcion)} USDT", 13, True, t.TEXT)),
+            "pnl": lineas(
+                (f"{t.fmt_pnl(pnl)} USDT", 13, True, t.GREEN if pnl >= 0 else t.RED),
+                (
+                    f"{pnl / proporcion * 100 if proporcion else 0:+.2f}%",
+                    11,
+                    False,
+                    t.GREEN if pnl >= 0 else t.RED,
+                ),
+            ),
+            "fee": lineas(
+                (
+                    f"{t.fmt_fee(detalle['total'])} USDT",
+                    13,
+                    True,
+                    t.RED if detalle["total"] else t.MUTED,
+                ),
+                (
+                    f"{t.fmt_share(detalle['total'] / proporcion * 100 if proporcion else 0)}"
+                    f" / {t.fmt_share(detalle['total'] / nocional * 100 if nocional else 0)}",
+                    11,
+                    False,
+                    t.MUTED,
+                ),
+                (
+                    f"ahorro {t.fmt_fee(detalle['ahorro'])}" if detalle["ahorro"] > 0 else "",
+                    11,
+                    False,
+                    t.GREEN,
+                ),
+            ),
+            "tpsl": lineas(*self._texto_stops(position, escala)),
+        }
+        return valores, pnl, largo, detalle, nocional
 
-            seleccion = QTableWidgetItem()
-            seleccion.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
-            seleccion.setCheckState(
-                Qt.Checked if position.get("positionId") in marcadas else Qt.Unchecked
+    @staticmethod
+    def _detalle_fee(detalle, nocional=0.0, funding=None, largo=True):
+        """Filas del globo de la fee: lo pagado, el próximo funding y el cierre.
+
+        El total es lo **ya cobrado** (comisión + funding), que solo cambia cuando el
+        broker lo cobra (funding cada 8 h o al cerrar una parte). El funding próximo
+        se muestra con su hora y el importe estimado para que el número no parezca
+        congelado.
+        """
+        filas = [
+            ("Comisión pagada (USDT)", t.fmt_fee(detalle["comision"]), t.TEXT),
+        ]
+        if detalle["funding"] > 0:
+            filas.append(("Funding cobrado (USDT)", t.fmt_fee(detalle["funding"]), t.RED))
+        filas.append(
+            (
+                "Fee pagada (USDT)",
+                t.fmt_fee(detalle["total"]),
+                t.RED if detalle["total"] else t.MUTED,
             )
-            tabla.setItem(fila, 0, seleccion)
+        )
+        if detalle["ahorro"] > 0:
+            filas.append(("Fees saved (USDT)", t.fmt_fee(detalle["ahorro"]), t.GREEN))
+        if funding and funding.get("proxima") and nocional:
+            tasa = float(funding.get("tasa") or 0)
+            hora = datetime.fromtimestamp(funding["proxima"]).strftime("%H:%M")
+            monto = abs(tasa * nocional)
+            paga = (tasa >= 0) == bool(largo)
+            filas.append(
+                (
+                    f"Funding {hora} ({tasa * 100:.4f}%)",
+                    f"{'paga' if paga else 'cobra'} {t.fmt_fee(monto)}",
+                    t.GOLD,
+                )
+            )
+        if nocional and detalle["comision"]:
+            tasa = detalle["comision"] / nocional * 100
+            filas.append(
+                (f"Al cerrar (taker {tasa:.3f}%)", t.fmt_fee(detalle["comision"]), t.MUTED)
+            )
+        return tuple(filas)
 
-            valores = {
-                "par": lineas(
-                    (position.get("_name") or position.get("symbol", ""), 13, True, t.TEXT)
-                ),
-                "lado": lineas(
-                    (
-                        f"{position.get('leverage', '')}X {'LONG' if largo else 'SHORT'}",
-                        13,
-                        True,
-                        t.GREEN if largo else t.RED,
-                    )
-                ),
-                "apertura": lineas((_cuando(position.get("createTime")), 13, False, t.MUTED)),
-                "pos": lineas((f"{t.fmt_usdt(nocional)} USDT", 13, True, t.TEXT)),
-                "entrada": lineas((t.fmt_price_exact(entrada, escala), 13, False, t.TEXT)),
-                "mark": lineas(
-                    (
-                        t.fmt_price_exact(marca, escala),
-                        13,
-                        False,
-                        t.GREEN if (marca > entrada) == largo else t.RED,
-                    )
-                ),
-                "liq": lineas(
-                    (
-                        t.fmt_price_exact(float(position.get("liquidatePrice") or 0), escala),
-                        13,
-                        False,
-                        t.GOLD,
-                    )
-                ),
-                "ratio": lineas(
-                    (
-                        f"{ratio:.2f}%" if ratio else "—",
-                        13,
-                        False,
-                        t.GOLD if ratio >= 20 else t.TEXT,
-                    )
-                ),
-                "margen": lineas((f"{t.fmt_usdt(proporcion)} USDT", 13, True, t.TEXT)),
-                "pnl": lineas(
-                    (f"{t.fmt_pnl(pnl)} USDT", 13, True, t.GREEN if pnl >= 0 else t.RED),
-                    (
-                        f"{pnl / proporcion * 100 if proporcion else 0:+.2f}%",
-                        11,
-                        False,
-                        t.GREEN if pnl >= 0 else t.RED,
-                    ),
-                ),
-                "fee": lineas(
-                    (
-                        f"{t.fmt_fee(detalle['total'])} USDT",
-                        13,
-                        True,
-                        t.RED if detalle["total"] else t.MUTED,
-                    ),
-                    (
-                        f"{t.fmt_share(detalle['total'] / proporcion * 100 if proporcion else 0)}"
-                        f" / {t.fmt_share(detalle['total'] / nocional * 100 if nocional else 0)}",
-                        11,
-                        False,
-                        t.MUTED,
-                    ),
-                    (
-                        f"ahorro {t.fmt_fee(detalle['ahorro'])}" if detalle["ahorro"] > 0 else "",
-                        11,
-                        False,
-                        t.GREEN,
-                    ),
-                ),
-                "tpsl": lineas(*self._texto_stops(position, escala)),
-            }
+    def _pintar_posiciones(self, posiciones):
+        """Actualiza en sitio; solo recrea filas si cambia el conjunto de posiciones.
+
+        Recrear cada 3 s destruia la barra de cierre y el `%` elegido volvia a
+        100, ademas de cerrar el panel del slider que colgaba de ella.
+        """
+        tabla = self._tabla_pos
+        ids = tuple(p.get("positionId") for p in posiciones)
+        rehacer = ids != self._firma_pos or tabla.rowCount() != len(posiciones)
+        self._firma_pos = ids
+        if rehacer:
+            tabla.setRowCount(len(posiciones))
+        marcadas = {p.get("positionId") for p in self._seleccionadas()}
+        for fila, position in enumerate(posiciones):
+            valores, pnl, largo, detalle, nocional = self._valores_fila(position)
+            fondo = self._fondos.get(
+                ((position.get("_exchange") or ""), position.get("symbol") or "")
+            )
+            tooltip = self._detalle_fee(detalle, nocional, fondo, largo)
+            marcada = position.get("positionId") in marcadas
             fondo_fila = t.ROW_ALT if fila % 2 else t.CARD
+            if rehacer:
+                seleccion = QTableWidgetItem()
+                seleccion.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                seleccion.setCheckState(Qt.Checked if marcada else Qt.Unchecked)
+                tabla.setItem(fila, 0, seleccion)
+            elif tabla.item(fila, 0) is not None:
+                tabla.item(fila, 0).setCheckState(Qt.Checked if marcada else Qt.Unchecked)
+
             for columna, (clave, _rotulo, _ancho, anclaje) in enumerate(POS_COLS, start=1):
-                item = QTableWidgetItem()
-                item.setTextAlignment(Qt.AlignRight if anclaje == "e" else Qt.AlignLeft)
-                if clave in PENCIL_COLS:
-                    # la celda lleva widget (valor + lapiz): el delegado no pinta nada
-                    accion = (
-                        (lambda p=position: self.control.tpsl(p))
+                if clave == "par":
+                    # par + wordmark del broker (dos lineas, como en MEXC)
+                    nombre = position.get("_name") or position.get("symbol", "")
+                    exchange = position.get("_exchange") or ""
+                    if rehacer:
+                        tabla.setCellWidget(fila, columna, CeldaPar(nombre, exchange, fondo_fila))
+                    else:
+                        tabla.cellWidget(fila, columna).set_datos(nombre, exchange)
+                elif clave in PENCIL_COLS:
+                    if rehacer:
+                        tabla.setCellWidget(
+                            fila, columna, CeldaLapiz(valores[clave], lambda: None, fondo_fila)
+                        )
+                    else:
+                        tabla.cellWidget(fila, columna).set_partes(valores[clave])
+                    # el lapiz tiene que abrir SIEMPRE el dato de esta fila, no el
+                    # que habia cuando se creo el widget (por eso reabria el TP viejo)
+                    celda = tabla.cellWidget(fila, columna)
+                    celda.set_partes(valores[clave])
+                    celda.set_accion(
+                        (lambda f=fila: self._editar_tpsl(f))
                         if clave == "tpsl"
-                        else (lambda p=position: self.control.margen(p))
+                        else (lambda f=fila: self._editar_margen(f))
                     )
-                    tabla.setCellWidget(
-                        fila,
-                        columna,
-                        self._celda_lapiz(clave, valores[clave], accion, fondo_fila),
-                    )
-                else:
+                elif rehacer:
+                    item = QTableWidgetItem()
+                    item.setTextAlignment(Qt.AlignRight if anclaje == "e" else Qt.AlignLeft)
                     item.setData(Qt.UserRole, valores[clave])
-                tabla.setItem(fila, columna, item)
+                    if clave == "fee":
+                        item.setData(SUBRAYADO, True)
+                        item.setData(DETALLE, tooltip)
+                    tabla.setItem(fila, columna, item)
+                else:
+                    item = tabla.item(fila, columna)
+                    item.setData(Qt.UserRole, valores[clave])
+                    if clave == "fee":
+                        item.setData(DETALLE, tooltip)
 
             acciones = len(POS_COLS) + 2
-            tabla.setCellWidget(
-                fila,
-                acciones,
-                BarraCierre(position, pnl, largo, self.control.cerrar, self.control.reverse),
-            )
+            if rehacer:
+                tabla.setCellWidget(
+                    fila,
+                    acciones,
+                    BarraCierre(position, pnl, largo, self.control.cerrar, self.control.reverse),
+                )
+            else:
+                tabla.cellWidget(fila, acciones).actualizar(position, pnl, largo)
         self._lbl_abiertas.setText(f"{len(posiciones)} abiertas")
 
     def _texto_stops(self, position, escala):
+        """TP y SL en una linea: `81,000.00 / 71,000.00`, y `--` donde no hay nivel."""
         tp = float(position.get("_tp") or 0)
         sl = float(position.get("_sl") or 0)
-        if tp and sl:
-            return (
-                (t.fmt_price_exact(tp, escala), 13, True, t.GREEN),
-                (t.fmt_price_exact(sl, escala), 13, True, t.RED),
-            )
-        if tp:
-            return ((f"TP {t.fmt_price_exact(tp, escala)}", 13, True, t.GREEN),)
-        if sl:
-            return ((f"SL {t.fmt_price_exact(sl, escala)}", 13, True, t.RED),)
-        return (("—", 13, False, t.MUTED),)
-
-    def _celda_lapiz(self, clave, partes, accion, fondo=None):
-        caja = QWidget()
-        if fondo:
-            caja.setStyleSheet(f"background: {fondo};")
-        fila = QHBoxLayout(caja)
-        fila.setContentsMargins(6, 0, 6, 0)
-        fila.setSpacing(4)
-        for texto, size, negrita, color in partes:
-            etiqueta = _etiqueta(str(texto), size, negrita, color=color)
-            etiqueta.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            fila.addWidget(etiqueta, 1)
-        lapiz = QToolButton()
-        lapiz.setIcon(QIcon(icono_lapiz(t.MUTED)))
-        lapiz.setIconSize(QSize(14, 14))
-        lapiz.setCursor(Qt.PointingHandCursor)
-        lapiz.setStyleSheet("QToolButton { border: 0; background: transparent; }")
-        lapiz.clicked.connect(lambda _=False: accion())
-        fila.addWidget(lapiz, 0)
-        return caja
+        texto_tp = t.fmt_price_exact(tp, escala) if tp else "--"
+        texto_sl = t.fmt_price_exact(sl, escala) if sl else "--"
+        return (
+            (texto_tp, 13, True, t.GREEN if tp else t.MUTED),
+            ("/", 13, False, t.MUTED),
+            (texto_sl, 13, True, t.RED if sl else t.MUTED),
+        )
 
     # ------------------------------------------------------------------ ordenes
     def _pintar_ordenes(self, ordenes):
@@ -596,12 +965,17 @@ class VistaQt(QMainWindow):
                 ),
                 "stops": lineas(
                     (
-                        f"TP {t.fmt_price_exact(tp, escala)}" if tp else "—",
+                        f"TP: Last≥{t.fmt_price_exact(tp, escala)}" if tp else "TP: —",
                         13,
                         False,
                         t.GREEN if tp else t.MUTED,
                     ),
-                    (f"SL {t.fmt_price_exact(sl, escala)}" if sl else "", 13, False, t.RED),
+                    (
+                        f"SL: Last≤{t.fmt_price_exact(sl, escala)}" if sl else "SL: —",
+                        13,
+                        False,
+                        t.RED if sl else t.MUTED,
+                    ),
                 ),
                 "fee": lineas((t.fmt_fee(orden.get("totalFee") or 0), 13, False, t.MUTED)),
                 "estado": lineas(
@@ -617,10 +991,11 @@ class VistaQt(QMainWindow):
                     tabla.setCellWidget(
                         fila,
                         columna,
-                        self._celda_lapiz(
-                            clave,
+                        CeldaLapiz(
                             valores.get(clave, lineas(("—", 13, False, t.MUTED))),
                             lambda o=orden: self.control.modificar(o),
+                            t.ROW_ALT if fila % 2 else t.CARD,
+                            vertical=clave == "stops",
                         ),
                     )
 
@@ -640,42 +1015,81 @@ class VistaQt(QMainWindow):
         )
 
     # ----------------------------------------------------------------- historial
-    def _pintar_historial(self, ordenes):
+    def _pedir_mas_historial(self):
+        """Trae la página siguiente de cada broker (lo ya visto no se pierde)."""
+        self._btn_mas.setEnabled(False)
+        self._btn_mas.setText("Cargando…")
+        threading.Thread(target=self.session.cargar_historial, args=(True,), daemon=True).start()
+
+    def _pintar_historial(self, filas):
+        """Una fila por operación: apertura y cierre con su PnL y sus fees."""
         tabla = self._tabla_hist
-        tabla.setRowCount(len(ordenes))
-        for fila, orden in enumerate(ordenes):
-            pnl = float(orden.get("profit") or 0)
-            fee = float(orden.get("totalFee") or 0)
-            estado = int(orden.get("state") or 0)
+        self._lbl_hist.setText(
+            f"{len(filas)} operaciones" if filas else "Sin operaciones en el historial"
+        )
+        tabla.setRowCount(len(filas))
+        for indice, fila in enumerate(filas):
+            pnl = float(fila.get("pnl") or 0)
+            fee = float(fila.get("fee") or 0)
+            neto = pnl - fee
+            estado = fila.get("estado") or ""
+            cierre = fila.get("cierre") or 0
+            abierta = float(fila.get("abierta") or 0)
+            cerrada = float(fila.get("cerrada") or 0)
+            lado = fila.get("lado") or "—"
             valores = {
-                "fecha": lineas((_cuando(orden.get("createTime")), 12, False, t.MUTED)),
-                "par": lineas((orden.get("symbol", ""), 12, False, t.TEXT)),
-                "tipo": lineas((SIDES.get(int(orden.get("side") or 0), "?"), 12, False, t.MUTED)),
-                "qty": lineas((t.fmt_qty(orden.get("vol")), 12, False, t.TEXT)),
-                "precio": lineas(
+                "apertura": lineas((_cuando(fila.get("apertura")), 12, False, t.MUTED)),
+                "cierre": lineas((_cuando(cierre) if cierre else "—", 12, False, t.MUTED)),
+                "lado": lineas((lado, 12, True, t.GREEN if lado == "LONG" else t.RED)),
+                "qty": lineas((t.fmt_qty(abierta or cerrada), 12, False, t.TEXT)),
+                "entrada": lineas(
                     (
-                        t.fmt_price(orden.get("dealAvgPrice") or orden.get("price")),
+                        t.fmt_price(fila.get("entrada")) if fila.get("entrada") else "—",
                         12,
                         False,
-                        t.TEXT,
+                        t.TEXT if fila.get("entrada") else t.MUTED,
+                    )
+                ),
+                "salida": lineas(
+                    (
+                        t.fmt_price(fila.get("salida")) if fila.get("salida") else "—",
+                        12,
+                        False,
+                        t.TEXT if fila.get("salida") else t.MUTED,
                     )
                 ),
                 "pnl": lineas((t.fmt_pnl(pnl), 12, False, t.GREEN if pnl >= 0 else t.RED)),
                 "fee": lineas((t.fmt_fee(fee), 12, False, t.RED if fee > 0 else t.MUTED)),
+                "neto": lineas((t.fmt_pnl(neto), 12, True, t.GREEN if neto >= 0 else t.RED)),
                 "estado": lineas(
                     (
-                        STATES.get(estado, str(estado)),
+                        estado,
                         12,
                         False,
-                        t.GREEN if estado == 3 else t.MUTED,
+                        t.GREEN
+                        if estado == "Cerrada"
+                        else (t.GOLD if estado == "Parcial" else t.MUTED),
                     )
                 ),
             }
-            for columna, (clave, _rotulo, _ancho, anclaje) in enumerate(HIST_COLS):
+            for columna, (clave, _rotulo, _ancho, anclaje) in enumerate(OPER_COLS):
+                if clave == "par":
+                    # par + wordmark del broker, igual que en posiciones
+                    tabla.setCellWidget(
+                        indice,
+                        columna,
+                        CeldaPar(
+                            fila.get("symbol", ""),
+                            fila.get("_exchange") or "",
+                            t.ROW_ALT if indice % 2 else t.CARD,
+                            compacta=True,
+                        ),
+                    )
+                    continue
                 item = QTableWidgetItem()
                 item.setData(Qt.UserRole, valores[clave])
                 item.setTextAlignment(Qt.AlignRight if anclaje == "e" else Qt.AlignLeft)
-                tabla.setItem(fila, columna, item)
+                tabla.setItem(indice, columna, item)
 
 
 def build_main_window():
