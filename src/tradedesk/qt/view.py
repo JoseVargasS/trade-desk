@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme as t
+from ..brokers import NOMBRES, TITULOS
 from ..controller import Control
 from ..layout import (
     ACTION_W,
@@ -49,7 +50,7 @@ from ..mexc import fee_desglose
 from ..paths import ASSETS
 from ..session import Session
 from . import dialogs
-from .cells import DETALLE, SUBRAYADO, Bocadillo, DelegadoCeldas, icono_lapiz, lineas
+from .cells import DETALLE, SUBRAYADO, Bocadillo, DelegadoCeldas, Spinner, icono_lapiz, lineas
 from .dialogs import QtPort
 from .search import buscar
 from .style import barra_oscura, fnt, logo, qss
@@ -58,6 +59,9 @@ from .style import etiqueta as _etiqueta
 from .tarjeta import BarraCierre, Tarjeta
 
 PRESETS = (1, 5, 10, 15, 20, 50)
+
+
+BROKERS = NOMBRES
 
 
 def _cuando(ms):
@@ -177,6 +181,10 @@ class VistaQt(QMainWindow):
         self._tarjetas = {}
         self._ultimo_error = ""
         self._fondos = {}
+        self._saldos = {}
+        self._ip = {}
+        self._hay_mas_hist = True
+        self._caja_saldos = None
         self._firma_pos = ()
         self._arrastrada = None
         self._desfase = QPoint()
@@ -231,44 +239,66 @@ class VistaQt(QMainWindow):
         super().closeEvent(evento)
 
     # ------------------------------------------------------------------ brokers
+    def _celda_saldo(self, nombre):
+        """Wordmark del broker + número + USDT, para la cabecera."""
+        caja = QWidget()
+        caja.setStyleSheet("background: transparent;")
+        fila = QHBoxLayout(caja)
+        fila.setContentsMargins(0, 0, 0, 0)
+        fila.setSpacing(6)
+        marca = QLabel()
+        marca.setPixmap(logo(nombre, 13, completo=True))
+        marca.setStyleSheet("background: transparent;")
+        fila.addWidget(marca, 0, Qt.AlignVCenter)
+        numero = _etiqueta("—", 13, True)
+        fila.addWidget(numero, 0, Qt.AlignVCenter)
+        fila.addWidget(_etiqueta("USDT", 13, True), 0, Qt.AlignVCenter)
+        self._caja_saldos.addWidget(caja)
+        self._saldos[nombre] = numero
+        if len(self._saldos) > 1:
+            self._caja_saldos.addWidget(_etiqueta("·", 12, False, muted=True))
+        return numero
+
     def _pintar_saldos(self, saldos):
-        """USDT disponible de cada broker, en la cabecera."""
-        partes = []
-        for nombre, titulo in (("mexc", "MEXC"), ("bitunix", "Bitunix")):
-            if self.session.cliente(nombre) is None:
-                continue
-            partes.append(f"{titulo} {t.fmt_usdt(saldos.get(nombre) or 0)}")
-        self._lbl_saldo.setText(" · ".join(partes) + " USDT" if partes else "— USDT")
+        """USDT disponible de cada broker, con su wordmark, en la cabecera."""
+        conectados = [nombre for nombre in BROKERS if self.session.cliente(nombre) is not None]
+        if not conectados:
+            self._lbl_saldo.setText("— USDT")
+            return
+        self._lbl_saldo.setVisible(False)
+        for nombre in conectados:
+            numero = self._saldos.get(nombre) or self._celda_saldo(nombre)
+            numero.setText(t.fmt_usdt(saldos.get(nombre) or 0))
 
     def _abrir_brokers(self):
         from .. import creds
 
         saldos = self.session.saldos
         filas = [
-            ("mexc", "MEXC", bool(creds.load("mexc")[0]), saldos.get("mexc") or 0),
-            ("bitunix", "Bitunix", bool(creds.load("bitunix")[0]), saldos.get("bitunix") or 0),
+            (nombre, TITULOS[nombre], bool(creds.load(nombre)[0]), saldos.get(nombre) or 0)
+            for nombre in BROKERS
         ]
         dialogs.brokers(self, filas, self._cargar_claves)
 
     def _cargar_claves(self, nombre):
         from .. import creds
+        from ..bingx import Bingx
         from ..bitunix import Bitunix
         from ..mexc import Mexc
 
-        if nombre == "bitunix":
-            got = dialogs.ask_key(self, lambda k, s: Bitunix(k, s).positions())
-        else:
-            got = dialogs.ask_key(self, lambda k, s: Mexc(k, s).positions())
+        clase = {"mexc": Mexc, "bitunix": Bitunix, "bingx": Bingx}[nombre]
+        got = dialogs.ask_key(self, lambda k, s: clase(k, s).positions())
         if not got:
             return
         creds.save(nombre, *got)
-        if nombre == "bitunix":
-            self.session.bitunix = Bitunix(*got)
-        else:
-            self.session.mx = Mexc(*got)
-        self.session.hay[nombre] = True
+        self.session.poner_cliente(nombre, clase(*got))
         self.statusBar().showMessage(f"Claves de {nombre} guardadas.")
-        threading.Thread(target=self.session.refresh_positions, daemon=True).start()
+
+        def refrescar():
+            self.session.refresh_saldos()
+            self.session.refresh_positions()
+
+        threading.Thread(target=refrescar, daemon=True).start()
         self._abrir_brokers()
 
     # ------------------------------------------------------------- construccion
@@ -291,8 +321,12 @@ class VistaQt(QMainWindow):
         brokers_btn.clicked.connect(self._abrir_brokers)
         fila.addWidget(brokers_btn)
         fila.addSpacing(10)
+        # respaldo cuando no hay ningun broker conectado
         self._lbl_saldo = _etiqueta("— USDT", 11, muted=True)
         fila.addWidget(self._lbl_saldo)
+        self._caja_saldos = QHBoxLayout()
+        self._caja_saldos.setSpacing(8)
+        fila.addLayout(self._caja_saldos)
         fila.addSpacing(10)
         self._lbl_ip = _etiqueta("IP —", 11, muted=True)
         fila.addWidget(self._lbl_ip)
@@ -310,7 +344,9 @@ class VistaQt(QMainWindow):
     def _copiar_ip(self):
         ip = self._lbl_ip.text().replace("IP", "").strip()
         QApplication.clipboard().setText(ip)
-        self.statusBar().showMessage(f"IP {ip} copiada.")
+        v6 = (getattr(self, "_ip", {}) or {}).get("v6")
+        extra = f" · IPv6 {v6} en el tooltip" if v6 else ""
+        self.statusBar().showMessage(f"IP {ip} copiada.{extra}")
 
     def _añadir_par(self):
         if not self.session.mercados:
@@ -479,8 +515,14 @@ class VistaQt(QMainWindow):
         col_hist.setContentsMargins(0, 0, 0, 0)
         col_hist.setSpacing(6)
         barra_hist = QHBoxLayout()
+        barra_hist.setSpacing(8)
         self._lbl_hist = _etiqueta("Historial", 11, muted=True)
         barra_hist.addWidget(self._lbl_hist)
+        self._spin_hist = Spinner(14)
+        barra_hist.addWidget(self._spin_hist, 0, Qt.AlignVCenter)
+        self._lbl_cargando = _etiqueta("Cargando…", 10, muted=True)
+        self._lbl_cargando.hide()
+        barra_hist.addWidget(self._lbl_cargando)
         barra_hist.addStretch(1)
         self._btn_mas = _boton("Ver más", 110, 26)
         self._btn_mas.clicked.connect(self._pedir_mas_historial)
@@ -556,10 +598,29 @@ class VistaQt(QMainWindow):
             elif tipo == "history":
                 self._pintar_historial(mensaje[1])
             elif tipo == "history_mas":
-                self._btn_mas.setEnabled(bool(mensaje[1]))
-                self._btn_mas.setText("Ver más" if mensaje[1] else "Sin más")
+                self._hay_mas_hist = bool(mensaje[1])
+                self._btn_mas.setEnabled(self._hay_mas_hist and not self._hist_cargando)
+                self._btn_mas.setText("Ver más" if self._hay_mas_hist else "Sin más")
+            elif tipo == "history_cargando":
+                cargando = bool(mensaje[1])
+                self._hist_cargando = cargando
+                if cargando:
+                    self._spin_hist.empezar()
+                else:
+                    self._spin_hist.parar()
+                self._lbl_cargando.setVisible(cargando)
+                self._btn_mas.setEnabled(not cargando and self._hay_mas_hist)
+                self._btn_mas.setText(
+                    "Cargando…" if cargando else ("Ver más" if self._hay_mas_hist else "Sin más")
+                )
             elif tipo == "ip":
-                self._lbl_ip.setText(f"IP {mensaje[1]}")
+                datos = mensaje[1] if isinstance(mensaje[1], dict) else {"v4": mensaje[1]}
+                self._ip = datos
+                self._lbl_ip.setText(f"IP {datos.get('v4') or '—'}")
+                self._lbl_ip.setToolTip(
+                    f"IPv4 {datos.get('v4') or '—'}\nIPv6 {datos.get('v6') or '—'}\n"
+                    "La key se ata a la que ve el exchange: los clientes usan la IPv4."
+                )
         # un modal dentro de _drenar congela el refresco: se abre al volver al bucle
         QTimer.singleShot(0, self._siguiente_aviso)
 
@@ -657,7 +718,7 @@ class VistaQt(QMainWindow):
         self._anims = {}
         self._arrastrada = None
         self._destino = None
-        clientes = {"mexc": self.session.mx, "bitunix": self.session.bitunix}
+        clientes = dict(self.session.clientes())
         for tarjeta in tarjetas:
             widget = Tarjeta(
                 tarjeta,
@@ -1024,6 +1085,9 @@ class VistaQt(QMainWindow):
     def _pintar_historial(self, filas):
         """Una fila por operación: apertura y cierre con su PnL y sus fees."""
         tabla = self._tabla_hist
+        barra = tabla.verticalScrollBar()
+        # el refresco de 15 s no puede devolver la vista al principio
+        previo = barra.value()
         self._lbl_hist.setText(
             f"{len(filas)} operaciones" if filas else "Sin operaciones en el historial"
         )
@@ -1090,6 +1154,7 @@ class VistaQt(QMainWindow):
                 item.setData(Qt.UserRole, valores[clave])
                 item.setTextAlignment(Qt.AlignRight if anclaje == "e" else Qt.AlignLeft)
                 tabla.setItem(indice, columna, item)
+        barra.setValue(min(previo, barra.maximum()))
 
 
 def build_main_window():

@@ -19,6 +19,10 @@ import httpx
 
 from . import creds, paths
 from .archivo import Archivo
+from .bingx import Bingx
+from .bingx import canonico as canonico_bingx
+from .bingx import decorate_orders as decorate_orders_bingx
+from .bingx import decorate_positions as decorate_positions_bingx
 from .bitunix import Bitunix, con_guion
 from .bitunix import decorate_orders as decorate_orders_bitunix
 from .bitunix import decorate_positions as decorate_positions_bitunix
@@ -29,19 +33,22 @@ TICKER_SEG = 0.70  # una peticion cada 0.7 s en total (~1.4 req/s, el limite med
 POSICIONES_SEG = 3.0
 HISTORIAL_SEG = 15.0
 SALDOS_SEG = 15.0
+IP_SEG = 900.0
 HISTORIAL_PAGINA = 50
 FONDOS_SEG = 60.0
 
 
 class Session:
-    def __init__(self, mx=None, bitunix=None):
+    def __init__(self, mx=None, bitunix=None, bingx=None):
         self.mx = mx or Mexc(*creds.load("mexc"))
         # segundo broker: por ahora solo lectura (F1); se rutea por tarjeta en F3
         self.bitunix = bitunix or Bitunix(*creds.load("bitunix"))
+        self.bingx = bingx or Bingx(*creds.load("bingx"))
         # qué brokers tienen claves: se lee una vez, no en cada vuelta del poller
         self.hay = {
             "mexc": bool(getattr(self.mx, "api_key", "")),
             "bitunix": bool(self.bitunix.key),
+            "bingx": bool(self.bingx.key),
         }
         self.q = queue.Queue()
         self.tarjetas = self._tarjetas()
@@ -49,11 +56,12 @@ class Session:
         self.mercados = {}
         self.ultimas_posiciones = []
         self.ultimas_ordenes = []
-        self.saldos = {"mexc": 0.0, "bitunix": 0.0}
+        self.saldos = {"mexc": 0.0, "bitunix": 0.0, "bingx": 0.0}
         self.fondos = {}
         self._hist_ordenes = {}
         self._hist_pagina = 0
-        self.historial_hay_mas = {"mexc": True, "bitunix": True}
+        self._hist_candado = threading.Lock()
+        self.historial_hay_mas = {"mexc": True, "bitunix": True, "bingx": True}
         # archivo local: el broker borra su historial, esto queda
         self.archivo = Archivo(paths.DATA_DIR / "operaciones.json")
         self.ver_historial = False
@@ -70,7 +78,18 @@ class Session:
             return self.bitunix if self.hay.get("bitunix") else None
         if exchange == "mexc":
             return self.mx if self.hay.get("mexc") else None
+        if exchange == "bingx":
+            return self.bingx if self.hay.get("bingx") else None
         return None
+
+    def clientes(self):
+        """Los tres clientes, con o sin claves (la tarjeta decide si sirve)."""
+        return {"mexc": self.mx, "bitunix": self.bitunix, "bingx": self.bingx}
+
+    def poner_cliente(self, exchange, cliente):
+        """Reemplaza el cliente cuando se cargan claves nuevas desde la UI."""
+        setattr(self, "mx" if exchange == "mexc" else exchange, cliente)
+        self.hay[exchange] = True
 
     def set_exchange(self, tarjeta_id, exchange):
         """Fija el broker de una tarjeta y lo guarda.
@@ -138,7 +157,7 @@ class Session:
             precio = float(self.precios.get(tarjeta["id"]) or 0)
             if cliente is not None:
                 try:
-                    if exchange == "bitunix":
+                    if exchange in ("bitunix", "bingx"):
                         contrato = cliente.contract(tarjeta["symbol"]) or {}
                     else:
                         contrato = self.contract_for(tarjeta["symbol"]) or cliente.contract(
@@ -168,45 +187,66 @@ class Session:
         self.q.put(("cards", lista))
 
     def cargar_historial(self, mas=False):
-        """Historial de los dos brokers, agrupado en operaciones (una fila por posición).
+        """Historial de los brokers, agrupado en operaciones (una fila por posición).
 
         La página 1 se refresca sola cada 15 s y se **fusiona** con lo ya traído; con
-        `mas=True` (botón `Ver más`) se pide la página siguiente de cada broker. Las
-        órdenes se guardan por `(broker, orderId)`, así un refresco no borra lo viejo
-        ni duplica filas.
+        `mas=True` (botón `Ver más`) se pide la siguiente página de cada broker. Las
+        órdenes se guardan por `(broker, orderId)`, así un refresco no borra lo viejo ni
+        duplica filas.
+
+        El refresco automático **no** toca `_hist_pagina`: antes lo reiniciaba a 1 y el
+        botón volvía a pedir la misma página (parecía que "no traía nada"). El candado
+        evita que dos cargas se pisen si el refresco cae mientras se pide más.
         """
-        self._hist_pagina = self._hist_pagina + 1 if mas else 1
-        pagina = self._hist_pagina
-        for nombre, traer in (
-            (
-                "mexc",
-                lambda: decorate_orders(self.mx, self.mx.history(HISTORIAL_PAGINA, pagina)),
-            ),
-            (
-                "bitunix",
-                lambda: self.bitunix.history(HISTORIAL_PAGINA, (pagina - 1) * HISTORIAL_PAGINA),
-            ),
-        ):
-            cliente = self.cliente(nombre)
-            if cliente is None:
-                continue
-            try:
-                filas = traer()
-            except Exception as exc:
-                self.q.put(("error", f"historial {nombre}: {exc}"))
-                continue
-            for orden in filas:
-                orden["_exchange"] = nombre
-                clave = (nombre, str(orden.get("orderId") or ""))
-                if clave in self._hist_ordenes:
+        if not self._hist_candado.acquire(blocking=False):
+            self.q.put(("history_cargando", False))
+            return
+        self.q.put(("history_cargando", True))
+        try:
+            if mas:
+                self._hist_pagina += 1
+            else:
+                self._hist_pagina = max(1, self._hist_pagina)
+            # el refresco automatico pide siempre la 1 (los cierres nuevos);
+            # `Ver mas` avanza el puntero y pide esa pagina
+            pagina = self._hist_pagina if mas else 1
+            for nombre, traer in (
+                (
+                    "mexc",
+                    lambda: decorate_orders(self.mx, self.mx.history(HISTORIAL_PAGINA, pagina)),
+                ),
+                (
+                    "bitunix",
+                    lambda: self.bitunix.history(HISTORIAL_PAGINA, (pagina - 1) * HISTORIAL_PAGINA),
+                ),
+                (
+                    "bingx",
+                    lambda: self.bingx.history(HISTORIAL_PAGINA, (pagina - 1) * HISTORIAL_PAGINA),
+                ),
+            ):
+                cliente = self.cliente(nombre)
+                if cliente is None:
                     continue
-                self._hist_ordenes[clave] = orden
-            if len(filas) < HISTORIAL_PAGINA:
-                self.historial_hay_mas[nombre] = False
-        self.q.put(
-            ("history", self.archivo.fusionar(operaciones(list(self._hist_ordenes.values()))))
-        )
-        self.q.put(("history_mas", any(self.historial_hay_mas.values())))
+                try:
+                    filas = traer()
+                except Exception as exc:
+                    self.q.put(("error", f"historial {nombre}: {exc}"))
+                    continue
+                for orden in filas:
+                    orden["_exchange"] = nombre
+                    clave = (nombre, str(orden.get("orderId") or ""))
+                    if clave in self._hist_ordenes:
+                        continue
+                    self._hist_ordenes[clave] = orden
+                if len(filas) < HISTORIAL_PAGINA:
+                    self.historial_hay_mas[nombre] = False
+            self.q.put(
+                ("history", self.archivo.fusionar(operaciones(list(self._hist_ordenes.values()))))
+            )
+            self.q.put(("history_mas", any(self.historial_hay_mas.values())))
+        finally:
+            self.q.put(("history_cargando", False))
+            self._hist_candado.release()
 
     # ------------------------------------------------------------- consultas
     def contract_for(self, symbol):
@@ -241,6 +281,16 @@ class Session:
             except Exception:
                 stops = []
             filas.extend(decorate_positions_bitunix(self.bitunix, self.bitunix.positions(), stops))
+        if self.cliente("bingx"):
+            try:
+                condicionales = self.bingx.open_orders()
+            except Exception:
+                condicionales = []
+            posiciones_bingx = self.bingx.positions()
+            comisiones = self.bingx.comisiones() if posiciones_bingx else {}
+            filas.extend(
+                decorate_positions_bingx(self.bingx, posiciones_bingx, condicionales, comisiones)
+            )
         return filas
 
     def refresh_orders(self):
@@ -257,6 +307,8 @@ class Session:
                 filas.append(orden)
         if self.cliente("bitunix"):
             filas.extend(decorate_orders_bitunix(self.bitunix, self.bitunix.open_orders()))
+        if self.cliente("bingx"):
+            filas.extend(decorate_orders_bingx(self.bingx, self.bingx.open_orders()))
         return filas
 
     def refresh_saldos(self):
@@ -265,6 +317,7 @@ class Session:
         for nombre, cliente in (
             ("mexc", self.cliente("mexc")),
             ("bitunix", self.cliente("bitunix")),
+            ("bingx", self.cliente("bingx")),
         ):
             if cliente is None:
                 continue
@@ -342,11 +395,26 @@ class Session:
         self.refresh_saldos()
 
     def _cargar_ip(self):
+        """IPv4 e IPv6 publicas.
+
+        La key se ata a la IP, y el exchange ve la que usa la conexion: si el
+        cliente sale por IPv6 (BingX responde `100419`), whitelistear la IPv4 no
+        sirve. Se muestran las dos y los clientes fuerzan IPv4.
+        """
+        datos = {"v4": "", "v6": ""}
         try:
-            ip = httpx.get("https://api.ipify.org", timeout=5).text.strip()
+            with httpx.Client(
+                timeout=5, transport=httpx.HTTPTransport(local_address="0.0.0.0")
+            ) as cliente:
+                datos["v4"] = cliente.get("https://api.ipify.org").text.strip()
         except Exception:
-            ip = "desconocida"
-        self.q.put(("ip", ip))
+            datos["v4"] = ""
+        try:
+            with httpx.Client(timeout=5) as cliente:
+                datos["v6"] = cliente.get("https://api6.ipify.org").text.strip()
+        except Exception:
+            datos["v6"] = ""
+        self.q.put(("ip", datos))
 
     def _cargar_catalogo(self):
         """Catálogo completo del buscador: MEXC y, si hay claves, Bitunix."""
@@ -377,6 +445,31 @@ class Session:
                 self.q.put(("status", f"Catálogo: {extra} pares extra de Bitunix"))
         except Exception as exc:
             self.q.put(("error", f"catalogo bitunix: {exc}"))
+        cliente = self.cliente("bingx")
+        if cliente is None:
+            return
+        try:
+            extra = 0
+            for par in cliente.contracts():
+                symbol = str(par.get("symbol") or "")
+                if not symbol.upper().endswith("-USDT"):
+                    continue
+                simbolo = canonico_bingx(symbol).replace("-", "_")
+                if not simbolo or simbolo in self.mercados:
+                    continue
+                self.mercados[simbolo] = {
+                    "symbol": simbolo,
+                    "baseCoin": canonico_bingx(symbol).split("-")[0],
+                    "quoteCoin": "USDT",
+                    "_priceScale": int(par.get("pricePrecision") or 2),
+                    "_solo": "bingx",
+                }
+                extra += 1
+            if extra:
+                self.q.put(("markets", self.mercados))
+                self.q.put(("status", f"Catálogo: {extra} pares extra de BingX"))
+        except Exception as exc:
+            self.q.put(("error", f"catalogo bingx: {exc}"))
 
     def _poll(self):
         indice = 0
@@ -384,6 +477,7 @@ class Session:
         proximo_hist = 0.0
         proximo_saldos = SALDOS_SEG
         proximo_fondos = FONDOS_SEG
+        proximo_ip = IP_SEG
         espera = TICKER_SEG
         while not self._parar.is_set():
             fallo = False
@@ -398,7 +492,7 @@ class Session:
                     try:
                         datos = cliente.ticker(symbol) or {}
                         precio = float(datos.get("lastPrice") or 0)
-                        if exchange == "bitunix":
+                        if exchange in ("bitunix", "bingx"):
                             apertura = float(datos.get("open") or 0)
                             cambio = (precio - apertura) / apertura * 100 if apertura else 0.0
                         else:
@@ -435,6 +529,10 @@ class Session:
             if ahora >= proximo_fondos:
                 proximo_fondos = ahora + FONDOS_SEG
                 self.refresh_fondos()
+            if ahora >= proximo_ip:
+                # la IP cambia (o el ISP la rota): se revalida cada 15 min
+                proximo_ip = ahora + IP_SEG
+                self._cargar_ip()
             # si algo falla (tipico: 510 Demasiadas peticiones) se afloja el ritmo
             espera = min(5.0, espera * 2) if fallo else TICKER_SEG
             time.sleep(espera)

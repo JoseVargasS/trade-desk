@@ -58,7 +58,7 @@ class Control:
         traer = getattr(self.session, "cliente", None)
         if not callable(traer):
             return [("mexc", self.mx)]
-        lista = [(n, traer(n)) for n in ("mexc", "bitunix") if traer(n) is not None]
+        lista = [(n, traer(n)) for n in ("mexc", "bitunix", "bingx") if traer(n) is not None]
         return lista or [("mexc", self.mx)]
 
     def broker_de(self, objeto, defecto="mexc"):
@@ -448,7 +448,7 @@ class Control:
             return
         symbol = order.get("symbol")
         cliente = self.broker_de(order)
-        if (order.get("_exchange") or "mexc") == "bitunix":
+        if (order.get("_exchange") or "mexc") in ("bitunix", "bingx"):
             contract = cliente.contract(symbol)
         else:
             contract = self.session.contract_for(symbol)
@@ -479,7 +479,7 @@ class Control:
                 cliente.cancel([order["orderId"]])
                 # el cancel es asincrono: reenviar de inmediato puede tocar el margen
                 # que el broker todavia tiene reservado para la orden vieja
-                if not self._wait_order_gone(order["orderId"]):
+                if not self._wait_order_gone(order["orderId"], cliente=cliente):
                     raise MexcError(
                         "El broker todavía no liberó la orden anterior. Reintenta en un segundo."
                     )
@@ -513,12 +513,13 @@ class Control:
             )
         self.session.refresh_orders()
 
-    def _wait_order_gone(self, order_id, timeout=2.5):
+    def _wait_order_gone(self, order_id, timeout=2.5, cliente=None):
         """Espera a que la orden cancelada desaparezca de `open_orders`."""
+        dueno = cliente or self.mx
         fin = time.time() + timeout
         while time.time() < fin:
             try:
-                abiertas = self.mx.open_orders()
+                abiertas = dueno.open_orders()
             except Exception:
                 return False
             if all(str(o.get("orderId")) != str(order_id) for o in abiertas):

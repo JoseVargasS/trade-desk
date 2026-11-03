@@ -55,6 +55,14 @@ def test_abrir_mercado_long():
     }
 
 
+def test_abrir_short_como_string_manda_sell():
+    """Regresión: la vista manda "SHORT" y el booleano lo tomaba como long."""
+    cliente, enviados = armado()
+    cliente.open_market("BTC_USDT", "SHORT", 100.0, 10, 5)
+    cuerpo = payload_de(enviados, "/trade/place_order")
+    assert cuerpo["side"] == "SELL"
+
+
 def test_abrir_limite_short_con_tp_sl():
     cliente, enviados = armado()
     cliente.open_market("BTCUSDT", False, 120.0, 5, 1, tp=59000.0, sl=61500.0, precio=61000.0)

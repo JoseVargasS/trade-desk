@@ -129,11 +129,13 @@ raiz/
     forms.py                parseo puro de tarjeta y editor de orden       60
     operaciones.py          empareja ordenes en operaciones (historial)   250
     archivo.py             operaciones guardadas en disco (upsert)        60
+    brokers.py             nombres y titulos de los brokers (compartido)  12
     layout.py               anchos/altos de las tablas (sin UI)            60
     pairs.py                filtro puro del buscador de pares              60
     theme.py                color, tipografia, radios, formatos           120
     mexc.py                 firma, endpoints, USDT->contratos, fee, liq   500
     bitunix.py              firma, endpoints, monedas (qty), specs        290
+    bingx.py                firma, endpoints, monedas (qty), specs        530
     creds.py                Windows Credential Manager                     29
     assets/                 icon.ico, icon.png, fonts/*.ttf
     qt/
@@ -333,6 +335,87 @@ se avisa, en vez de mandar `qty: 0`.
 conversión USDT→qty divide por el precio y hace floor al `minTradeVolume` del par
 (BTC: step `0.0001`). El cambio 24 h se calcula con `open` como referencia.
 
+### BingX (tercer broker)
+
+| Tema | Detalle |
+|---|---|
+| Base | `https://open-api.bingx.com` — **solo v2** (v1 responde `100400 this api is not exist`) |
+| Firma | params ordenados + `timestamp` (ms) -> `HMAC-SHA256` hex, que viaja como **parámetro `signature`**; la key en la cabecera `X-BX-APIKEY` |
+| Errores | **HTTP 200 también con error**: `code` (`0` = bien) y `msg` en el cuerpo |
+| Símbolo | `BTC-USDT` (guion); la app lo canonicaliza a `BTC_USDT` |
+| Tamaño | `quantity` en **monedas**, step = `tradeMinQuantity` (BTC `0.0001`) |
+
+```
+GET  /openApi/swap/v2/quote/ticker?symbol=BTC-USDT   precio (`lastPrice`, `openPrice`)
+GET  /openApi/swap/v2/quote/contracts               1.318 pares: `size`, `quantityPrecision`,
+                                                     `pricePrecision`, `tradeMinQuantity`, `tradeMinUSDT`
+GET  /openApi/swap/v2/user/balance                  `availableMargin`
+GET  /openApi/swap/v2/user/positions                `positionSide`, `positionAmt`, `avgPrice`
+GET  /openApi/swap/v2/trade/openOrders              `orders`
+GET  /openApi/swap/v2/trade/allOrders               historial (`profit`, `commission`)
+POST /openApi/swap/v2/trade/order                   abrir/cerrar (`positionSide`, TP/SL en JSON)
+POST /openApi/swap/v2/trade/closePosition           cierre total por `positionId`
+DELETE /openApi/swap/v2/trade/order                 cancelar (una por llamada; pide `symbol`)
+POST /openApi/swap/v2/trade/leverage                `symbol`, `side`, `leverage`
+POST /openApi/swap/v2/trade/positionMargin          margen (`type` 1 suma / 2 resta)
+```
+
+**Verificado con la API real (3-nov-2026)**: base, forma de error, 1.318 pares, specs de
+BTC-USDT (`tradeMinQuantity` 0.0001, `pricePrecision` 1, mínimo 2 USDT, taker 0,05 %). El
+`quantity` está en **monedas** (DOGE mínimo 27 = 27 DOGE), no en contratos.
+
+**Privados confirmados con la key real**: `/user/balance` devuelve `{"balance": {...}}`
+(un dict **anidado**, no una lista — mapearlo como lista daba saldo 0); `/user/positions`
+devuelve `{"positions": [...]}` y `/trade/openOrders` `{"orders": [...]}` (los dos pasan
+por `_filas`); `/trade/allOrders` devuelve las órdenes y no acepta `page`, así que el
+historial se pagina pidiendo `limit = limite + salto` y cortando el principio.
+**La firma viaja como parámetro `signature`** (no como cabecera): sin eso BingX responde
+`100412 Null signature`. **Sin verificar**: los campos de una posición abierta
+(`positionAmt`, `avgPrice`) y las órdenes de escritura, hasta la primera operación real.
+
+**IPv4 forzada en los tres clientes**: `httpx.HTTPTransport(local_address="0.0.0.0")`.
+Las keys están atadas a la IP y sin esto la conexión puede salir por IPv6: BingX devolvía
+`100419 ... does not match IP whitelist` con una IPv6 que la app no mostraba. La cabecera
+muestra la IPv4 y el tooltip las dos (IPv4 e IPv6).
+
+**Verificado con dinero real (3-nov, dos rondas de 0,0001 BTC a 1x, ~0,02 USDT de fees):**
+abrir a mercado (FILLED, `avgPrice` real), leer la posición (`positionAmt`, `avgPrice`,
+`unrealizedProfit`, `margin`, `leverage`, `riskRate` → los mapeos del `decorate` estaban
+bien) y cerrar. El historial agrupado sale correcto (`Cerrada LONG 0.0001` con entrada,
+salida, PnL y fee).
+
+**Trampas confirmadas en vivo** (las tres ya están en el módulo):
+
+1. **POST sin `Content-Type`**: los parámetros van en la query y el cuerpo va vacío; con
+   `Content-Type: application/json` BingX responde `109400 Invalid parameters`.
+2. **No existe `closePosition`** en v2 (`100400 this api is not exist`): el cierre es una
+   orden al lado contrario (`trade/order`).
+3. **En HEDGE `reduceOnly` no va**: `109400 In the Hedge mode, the 'ReduceOnly' field can
+   not be filled`. Se manda sin el campo y se reintenta con él solo si la API lo pide
+   (modo one-way).
+
+**TP/SL**: en la **orden** funcionan como JSON (`takeProfit`/`stopLoss` con
+`{"type":"TAKE_PROFIT_MARKET","stopPrice":...}`) — verificado: quedan dos condicionales
+`STOP_MARKET` / `TAKE_PROFIT_MARKET` vivas. La **posición no trae TP/SL**, así que se leen
+de esas condicionales (`open_orders`) y `decorate_positions` las recibe como tercer
+argumento. Para una posición abierta se ponen con `quantity` (no `closePosition`: responde
+`109400 parameter quantity or stopPrice is must`), cancelando antes las viejas.
+
+**Ronda final en SHORT 1x (todo verificado en vivo)**: orden límite de venta creada y
+cancelada; apertura SHORT con TP/SL en la orden (la fila muestra `tp`/`sl` leídos de las
+condicionales); edición de TP/SL con el lápiz (cancela las viejas y pone las nuevas);
+cierre parcial (0,0002 → 0,0001) y **reverse** (SHORT → LONG). El `reverse` necesitó 1 %
+de margen en el nocional: con el nocional justo de la entrada, un tick de más deja el
+floor en 0 y reabría nada después de cerrar (bug real, con test).
+
+**La fee de la posición sale del historial**: `/user/positions` no la trae, pero
+`/trade/allOrders` sí (`commission`, negativo) y con **`positionID` en mayúsculas** (ojo:
+la posición usa `positionId`). `Bingx.comisiones()` suma la comisión por `positionID` y
+`decorate_positions` la recibe como cuarto argumento; el poller la pide solo si hay
+posiciones, con caché de 2 s. **El historial tarda ~3 s en indexar la apertura**, así que
+la celda se llena en el primer refresco posterior (verificado: 0,003824 en 0,0001 SHORT).
+Falta el funding del par (no hay endpoint implementado).
+
 **Seguridad de la key.** Se crea en MEXC con permisos de futuros + lectura, **sin retiros ni
 transferencias**, y con **IP vinculada** (sin IP la key expira a los 90 días). Si el ISP cambia
 la IP, la API responde `406 Accessing IP is not in the whitelist`; la app muestra la IP actual
@@ -420,7 +503,9 @@ en la cabecera con botón para copiarla.
   **wordmark** (marca + nombre) del broker: `assets/mexc_full.svg` (letras blancas, como el
   original) y `assets/bitunix_full.svg` (marca `#28D2B0`, letras `#E8EAED`, porque Qt no
   resuelve las variables CSS del SVG). Las versiones sin `_full` son solo la marca y se usan
-  en el desplegable. Arranca **sin broker**: muestra `Broker` y `Elige un broker para
+  en el desplegable. La lista sale de `brokers.NOMBRES`/`TITULOS` (compartida con la
+  cabecera y el panel `Brokers`), asi que sumar un broker es una linea. Arranca **sin
+  broker**: muestra `Broker` y `Elige un broker para
   operar`, con `LONG`/`SHORT` apagados. La elección se guarda por tarjeta en `config.json`
   (`exchange`); las tarjetas viejas sin ese campo se asumen de MEXC. Cambiar de broker **no
   republica** el deck (borraría el tamaño escrito): el contrato se pide al cliente nuevo y
@@ -438,10 +523,14 @@ en la cabecera con botón para copiarla.
   en los dos brokers a la vez. El precio se cachea por `id`, no por símbolo, y el ticker
   publica `("ticker", id, precio, cambio)`. El buscador suma al catálogo de MEXC los pares
   que solo tiene Bitunix (se guardan con el símbolo de MEXC y cada módulo lo convierte).
-- La cabecera muestra el **USDT disponible de cada broker** (`MEXC 4.906,26 · Bitunix
-  309,61 USDT`, cada 15 s) y lo mismo en el panel `Brokers`. MEXC lo lee de
-  `mx.available()` (`/private/account/assets`, campo `availableBalance`) y Bitunix de
-  `bx.available()` (`/futures/account`, `marginCoin` USDT, campo `available`).
+- La cabecera muestra el **USDT disponible de cada broker** con su **wordmark** (`logo(nombre,
+  13, completo=True)`), el número y el `USDT` en 13 px **negrita**, separados por
+  un `·`; cada 15 s. La lista sale de `BROKERS` y `TITULOS` en `view.py`, así sumar un broker
+  es una línea. MEXC lo lee de `mx.available()` (`/private/account/assets`, campo
+  `availableBalance`) y Bitunix de `bx.available()` (`/futures/account`, `marginCoin` USDT,
+  campo `available`).
+- La **IP** se consulta al arrancar y se **revalida cada 15 min** (`IP_SEG`) desde el poller,
+  porque la key de MEXC/Bitunix está atada a la IP y el ISP la rota: la cabecera avisa sola.
 - En la tabla de posiciones la columna del par lleva el ticker y, debajo, el **wordmark del
   broker** a 12 px (`CeldaPar`), así se ve de un vistazo de dónde es cada posición.
 - El **historial** es una fila por **operación**, no por orden: `operaciones.py` empareja
@@ -463,6 +552,13 @@ en la cabecera con botón para copiarla.
   refresco **fusiona** (no borra ni duplica) y `history_mas` apaga el botón cuando un broker
   devuelve menos de 50. Con una página sola se veían ~1 mes de operaciones: por eso "llegaba
   hasta setiembre".
+- **Paginación (trampa resuelta)**: el refresco automático pide siempre la **página 1** y
+  **no** reinicia `_hist_pagina` (antes lo hacía y `Ver más` volvía a pedir la misma página:
+  parecía que no traía nada). Un candado (`_hist_candado`) descarta la carga que llegue
+  mientras otra está en vuelo. `history_cargando` (true/false) maneja el **spinner**
+  (`cells.Spinner`, un arco girando con `QTimer`) y el texto `Cargando…` del botón.
+  Al repintar se conserva el **scroll** (`verticalScrollBar().value()`), así las filas
+  nuevas quedan abajo y la vista no salta.
 - Las celdas con lápiz se reasignan en cada refresco (`CeldaLapiz.set_accion`): la acción
   tiene que resolver la fila viva (`_posicion(fila)`), no cerrar sobre el dict que existía
   al crear el widget. Así se abrió el editor con un TP que ya se había borrado.
@@ -673,9 +769,10 @@ en ~0 al ejecutarse.
 - Guardar más de un TP parcial por posición (MEXC admite un TP y un SL por stop order).
 - Saldo disponible en la cabecera (`mx.assets()` ya existe, falta pintarlo).
 - Cambiar el par de una tarjeta sin quitarla y volver a añadirla.
-- Otros exchanges: **Bitunix** y **BingX** (documentados en la conversación de origen).
-  Bitunix: firma SHA256 doble, TP/SL en la misma orden, sin close-all.
-  BingX: v1 y v2 conviven, TP/SL requiere `positionId` (dos pasos).
+- **BingX funciona y está verificado con dinero real** (0,0001-0,0002 BTC, ~0,03 USDT de
+  fees entre todas las rondas): abrir long/short a mercado, límite + cancelar, TP/SL al
+  abrir y con el lápiz, cierre parcial, reverse y cierre total. Pendiente chico: la fee de
+  una posición abierta (BingX no la expone) y el funding del par.
 - `.exe` con PyInstaller `--onedir` si algún día aceptan el aviso de SmartScreen.
 
 ---

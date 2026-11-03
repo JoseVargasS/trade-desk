@@ -43,6 +43,17 @@ def con_guion(simbolo):
     return limpio
 
 
+def largo(valor):
+    """Interpreta el lado: la vista manda "LONG"/"SHORT", no un booleano.
+
+    Antes se usaba `long_` como bool y "SHORT" (string no vacío) era verdadero:
+    toda orden de Bitunix entraba como BUY.
+    """
+    if isinstance(valor, str):
+        return valor.strip().upper() in ("LONG", "BUY", "TRUE", "1")
+    return bool(valor)
+
+
 def _filas(datos):
     """Bitunix devuelve listas o dicts con la lista adentro; esto lo normaliza."""
     if isinstance(datos, list):
@@ -179,8 +190,11 @@ class Bitunix:
     @property
     def cliente(self):
         if self._cliente is None:
+            # IPv4 forzada: las keys estan atadas a la IPv4 del usuario
             self._cliente = httpx.Client(
-                timeout=self.timeout, headers={"User-Agent": UA, "Content-Type": "application/json"}
+                timeout=self.timeout,
+                headers={"User-Agent": UA, "Content-Type": "application/json"},
+                transport=httpx.HTTPTransport(local_address="0.0.0.0"),
             )
         return self._cliente
 
@@ -394,7 +408,7 @@ class Bitunix:
         payload = {
             "symbol": symbol,
             "qty": self._texto_qty(qty),
-            "side": "BUY" if long_ else "SELL",
+            "side": "BUY" if largo(long_) else "SELL",
             "orderType": "LIMIT" if precio else "MARKET",
         }
         if self.position_mode() == "HEDGE":

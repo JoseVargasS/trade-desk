@@ -6,7 +6,7 @@ La celda marcada con `SUBRAYADO` lleva linea punteada bajo el importe y muestra
 su `ToolTipRole` al pasar el puntero (el detalle de la fee).
 """
 
-from PySide6.QtCore import QPoint, QPointF, QRect, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QToolTip, QWidget
 
@@ -16,6 +16,45 @@ from .style import fnt
 SUBRAYADO = Qt.UserRole + 1
 DETALLE = Qt.UserRole + 2  # filas (nombre, valor, color) del globo de la fee
 _FUENTES = {}
+
+
+class Spinner(QWidget):
+    """Ruedita de carga: un arco girando, sin gifs ni dependencias."""
+
+    def __init__(self, lado=14, color=None, parent=None):
+        super().__init__(parent)
+        self.lado = lado
+        self._angulo = 0
+        self._color = color or t.GOLD
+        self.setFixedSize(lado, lado)
+        self._timer = QTimer(self)
+        self._timer.setInterval(70)
+        self._timer.timeout.connect(self._girar)
+        self.hide()
+
+    def _girar(self):
+        self._angulo = (self._angulo + 30) % 360
+        self.update()
+
+    def empezar(self):
+        self.show()
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def parar(self):
+        self._timer.stop()
+        self.hide()
+
+    def paintEvent(self, evento):
+        pintor = QPainter(self)
+        pintor.setRenderHint(QPainter.Antialiasing)
+        pluma = QPen(self._color, 2)
+        pluma.setCapStyle(Qt.RoundCap)
+        pintor.setPen(pluma)
+        margen = 2
+        lado = self.lado - margen * 2
+        pintor.drawArc(margen, margen, lado, lado, self._angulo * 16, 270 * 16)
+        pintor.end()
 
 
 def fuente(size, bold=False):

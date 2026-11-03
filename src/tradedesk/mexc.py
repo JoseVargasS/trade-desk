@@ -272,10 +272,13 @@ class Mexc:
         self.api_key = api_key
         self.secret = secret
         # cliente persistente: reusa la conexion TLS (~20ms por orden en vez de ~45ms)
+        # local_address IPv4: la key esta atada a la IPv4 del usuario y sin esto
+        # la conexion puede salir por IPv6 (BingX responde 100419)
         self.http = httpx.Client(
             base_url=BASE,
             timeout=8.0,
             headers={"User-Agent": UA, "Content-Type": "application/json"},
+            transport=httpx.HTTPTransport(local_address="0.0.0.0"),
         )
         self._contracts = {}
         self._markets = None

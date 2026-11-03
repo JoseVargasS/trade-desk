@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme as t
+from ..brokers import NOMBRES, TITULOS
 from ..forms import form_tarjeta, volumen_cerrar
 from . import dialogs
 from .style import Segmentado, fnt, logo
@@ -589,7 +590,8 @@ class Tarjeta(QFrame):
         )
         actual = self.broker()
         acciones = {}
-        for nombre, titulo in (("mexc", "MEXC"), ("bitunix", "Bitunix")):
+        for nombre in NOMBRES:
+            titulo = TITULOS[nombre]
             accion = menu.addAction(QIcon(logo(nombre, 14)), titulo)
             accion.setCheckable(True)
             accion.setChecked(nombre == actual)
