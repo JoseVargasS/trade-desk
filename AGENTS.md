@@ -53,6 +53,13 @@ scripts\check.bat           # lint + formato + tests de una
   cierra sola; no envía órdenes). Si se tocaron tablas, `python tools/qt_probe.py` mide el
   repintado con 8 tarjetas y 200 filas.
 - Antes de commitear: `scripts\check.bat` en verde (una sola vez, no en cada paso).
+- **Los mensajes de commit siguen la skill `git-commit`** (`~/.agents/skills/git-commit`):
+  `tipo(scope): descripcion` en imperativo, descripción de **72 caracteres máximo** y bullets
+  de **una sola línea** con lenguaje claro (qué cambia y por qué, no cómo). Cargar la skill
+  antes de escribir el mensaje; no confiarse de la memoria.
+- **El formato lo valida un hook**: `scripts/commit-msg` se copia a `.git/hooks/commit-msg`
+  (`Copy-Item scripts\commit-msg .git\hooks\commit-msg`). Rechaza los mensajes sin tipo
+  válido o con descripción de más de 72 caracteres.
 
 ---
 

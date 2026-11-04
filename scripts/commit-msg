@@ -1,0 +1,25 @@
+#!/bin/sh
+# Valida el mensaje de commit: Conventional Commits y descripcion de 72 max.
+# Se instala copiandolo a .git/hooks/commit-msg (ver AGENTS.md, seccion 0).
+
+# sin BOM y sin espacios al final: el mensaje se compara tal cual
+mensaje=$(head -n 1 "$1" | tr -d '\357\273\277' | sed 's/[[:space:]]*$//')
+patron='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._-]+\))?!?: .+'
+
+if ! printf '%s' "$mensaje" | grep -Eq "$patron"; then
+    echo "commit-msg: el mensaje no sigue Conventional Commits" >&2
+    echo "  formato:  <tipo>(<scope>): <descripcion>" >&2
+    echo "  tipos:    feat fix docs style refactor perf test build ci chore revert" >&2
+    echo "  ejemplo:  fix(bingx): corregir el tamano de la posicion" >&2
+    echo "  recibido: $mensaje" >&2
+    exit 1
+fi
+
+largo=$(printf '%s' "$mensaje" | wc -m | tr -d ' ')
+if [ "$largo" -gt 72 ]; then
+    echo "commit-msg: la descripcion tiene $largo caracteres (maximo 72)" >&2
+    echo "  recibido: $mensaje" >&2
+    exit 1
+fi
+
+exit 0
