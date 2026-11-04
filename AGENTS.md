@@ -94,9 +94,11 @@ Decisiones de fondo que **no** están en discusión:
    **límite** (puede quedar sin llenar) y el `%` permite cerrar una parte. También:
    checkboxes + `Cerrar seleccionadas`, `Reverse` y `CERRAR TODO` (siempre a mercado).
    El **lápiz de TP/SL** abre el editor con dos líneas vivas (`TP 101,200.0 → +15.2400 USDT`
-   y `SL 99,500.0 → -6.3500 USDT`) y un botón `Break-even` que rellena el SL con el precio
-   que deja la operación en cero (comisión de entrada + salida + funding). Se habilita solo
-   cuando el precio ya lo pasó; si no alcanza, el botón sale gris y la nota dice cuánto falta.
+   y `SL 99,500.0 → -6.3500 USDT`), dos campos **% del margen** que calculan el precio
+   (`TP 15` → precio con +15 % de PnL sobre el margen; el SL se escribe en negativo) y un
+   botón `Break-even` que rellena el SL con el precio que deja la operación en cero
+   (comisión de entrada + salida + funding). Se habilita solo cuando el precio ya lo pasó; si
+   no alcanza, el botón sale gris y la nota dice cuánto falta.
 8. Pestaña **Órdenes** (panel estilo MEXC): las límite que todavía no se llenaron, con par
    (+`Perpetual` y el % llenado debajo), fecha, dirección (`Compra LONG` / `Venta SHORT`),
    apalancamiento, monto, precio, llenado, margen usado, TP/SL en dos líneas, fee y estado.
@@ -398,8 +400,14 @@ salida, PnL y fee).
 `{"type":"TAKE_PROFIT_MARKET","stopPrice":...}`) — verificado: quedan dos condicionales
 `STOP_MARKET` / `TAKE_PROFIT_MARKET` vivas. La **posición no trae TP/SL**, así que se leen
 de esas condicionales (`open_orders`) y `decorate_positions` las recibe como tercer
-argumento. Para una posición abierta se ponen con `quantity` (no `closePosition`: responde
-`109400 parameter quantity or stopPrice is must`), cancelando antes las viejas.
+argumento. Para una posición abierta se ponen con `closePosition: "true"` **más**
+`quantity` y `stopPrice` (la doc oficial exige los tres): sin `closePosition` BingX las crea
+como **orden parcial al 100 %** y en su app salen como "Posición parcial" en vez de
+"Posición completa". `closePosition` y `reduceOnly` no se combinan. Antes de colocar se
+cancelan las condicionales viejas.
+**Borrar el TP/SL** (los dos campos vacíos) llama a `tpsl_place(..., None, None)` aunque no
+haya nada que poner: en BingX las condicionales las cancela esa misma llamada, así que
+saltársela dejaba el SL pegado en el broker.
 
 **Ronda final en SHORT 1x (todo verificado en vivo)**: orden límite de venta creada y
 cancelada; apertura SHORT con TP/SL en la orden (la fila muestra `tp`/`sl` leídos de las
@@ -407,6 +415,10 @@ condicionales); edición de TP/SL con el lápiz (cancela las viejas y pone las n
 cierre parcial (0,0002 → 0,0001) y **reverse** (SHORT → LONG). El `reverse` necesitó 1 %
 de margen en el nocional: con el nocional justo de la entrada, un tick de más deja el
 floor en 0 y reabría nada después de cerrar (bug real, con test).
+
+**El apalancamiento llega como `"10X"`** en las órdenes: `_apalancamiento()` lo convierte a
+número porque la tabla lo pinta con `int()` (con el string, pintar Órdenes lanzaba
+`invalid literal for int() with base 10: '10X'`).
 
 **La fee de la posición sale del historial**: `/user/positions` no la trae, pero
 `/trade/allOrders` sí (`commission`, negativo) y con **`positionID` en mayúsculas** (ojo:
@@ -431,6 +443,14 @@ en la cabecera con botón para copiarla.
 - DRY-RUN bloquea abrir, cerrar y reverse; TP/SL, margen y cancelar pasan siempre. Es la red de
   seguridad principal.
 - La app no escucha puertos ni corre nada en segundo plano al cerrarse.
+
+**Pruebas de escritura (regla dura).** Nunca se manda una orden a un par donde el
+usuario tenga posición abierta: en hedge, una apertura del mismo lado se **suma** a la
+suya y una limpieza se la cierra. Para verificar aperturas, cierres, parciales, TP/SL,
+reverse o margen se usa **otro par** (uno que el usuario no esté operando) o una posición
+**sintética** con un cliente falso. Antes de correr un script de escritura, consultar
+`positions()` y elegir un símbolo que no aparezca; y al limpiar, filtrar por símbolo y
+cantidad exactos de lo que abrió el script.
 
 ---
 
@@ -466,7 +486,13 @@ en la cabecera con botón para copiarla.
   mínimo se calcula con el **paso de la unidad**: `ceil(100 * paso / holdVol)`, donde paso
   es **1** en MEXC (contratos) y el `qtyStep` del par en Bitunix (`_qtyStep`, 0.0001 BTC).
   Antes se usaba `ceil(100/holdVol)` a secas y en Bitunix daba 100 % (0,0003 → 333.334):
-  el slider no se movía. Por debajo del mínimo la bolita vuelve y esa zona se pinta
+  el slider no se movía. **Una posición de una sola unidad** (BTC 0,0001 o un contrato)
+  no se puede partir: `min_pct()` da 100 y el chip del `%` queda **deshabilitado** con un
+  tooltip que lo explica. Antes se podía arrastrar y volvía solo a 100 %, que parecía roto.
+  **El panel es un `QDialog` con `Qt.Popup` que se muestra con `show()`, nunca con
+  `exec()`**: con `exec()` quedaba **modal** y el clic en Cerrar no llegaba al controlador
+  (se elegía 30 % y "no pasaba nada"). Además se cierra solo en `leaveEvent` (salir con el
+  mouse), así el clic siguiente ya cae en el botón. Por debajo del mínimo la bolita vuelve y esa zona se pinta
   apagada; el resumen dice `Cierras: X USDT ≈ N contratos|monedas`. El volumen del cierre
   sale de `forms.volumen_cerrar(hold, pct, paso)`, que el controlador usa igual: floor al
   paso y 100 % exacto (un cierre total no puede fallar por redondeo). El clic y el arrastre los mapea `SliderPct`
@@ -499,6 +525,11 @@ en la cabecera con botón para copiarla.
 - La selección de posiciones se restaura por `positionId` y las filas se **actualizan en
   sitio**: recrearlas cada 3 s reseteaba el `%` de cierre a 100 y cerraba el panel del
   slider, que cuelga de la barra de cierre de la fila.
+- **Los widgets de la fila pintan su fondo** (`WA_StyledBackground` + `set_fondo` en
+  `CeldaPar`, `CeldaLapiz` y `BarraCierre`): sin eso eran transparentes y en las filas
+  impares mostraban el color del viewport, que se veía como cuadros grises distintos. El
+  color se re-aplica en cada refresco porque sigue a la **fila**, no al widget: si las
+  posiciones se reordenan, el fondo tiene que moverse con ellas.
 - **Cada tarjeta elige su broker** con el selector de la cabecera, que muestra el
   **wordmark** (marca + nombre) del broker: `assets/mexc_full.svg` (letras blancas, como el
   original) y `assets/bitunix_full.svg` (marca `#28D2B0`, letras `#E8EAED`, porque Qt no
@@ -510,6 +541,9 @@ en la cabecera con botón para copiarla.
   (`exchange`); las tarjetas viejas sin ese campo se asumen de MEXC. Cambiar de broker **no
   republica** el deck (borraría el tamaño escrito): el contrato se pide al cliente nuevo y
   el precio llega con el siguiente ticker.
+- **El deck reusa las tarjetas**: `_pintar_deck` crea solo la nueva y destruye solo la que
+  se quitó (antes borraba y recreaba todas, y al añadir un par se perdía lo escrito en el
+  tamaño, TP, SL y apalancamiento de las demás cajas).
 - Las tarjetas se **arrastran en vivo** para reordenarlas. La fila **no usa layout**: las
   tarjetas se colocan a mano en un lienzo (`_lienzo`) a `indice * (286 + 10)`, así cada una
   puede animarse sola. Al arrastrar, la tarjeta agarrada sigue al cursor por encima del
@@ -526,9 +560,20 @@ en la cabecera con botón para copiarla.
 - La cabecera muestra el **USDT disponible de cada broker** con su **wordmark** (`logo(nombre,
   13, completo=True)`), el número y el `USDT` en 13 px **negrita**, separados por
   un `·`; cada 15 s. La lista sale de `BROKERS` y `TITULOS` en `view.py`, así sumar un broker
-  es una línea. MEXC lo lee de `mx.available()` (`/private/account/assets`, campo
-  `availableBalance`) y Bitunix de `bx.available()` (`/futures/account`, `marginCoin` USDT,
-  campo `available`).
+  es una línea. **El número es el saldo en vivo de la cuenta, con el PnL no realizado
+  dentro** (el usuario lo quiere ver moverse con las posiciones): MEXC `equity`, Bitunix
+  `available + margin + frozen`, BingX `equity`. `available()` sigue devolviendo lo libre y
+  no es lo que se pinta: mostrarlo hacía parecer roto el saldo (14,79 de 313,24 con una
+  posición abierta).
+- En la barra de **Posiciones** se ve el **PnL bruto y neto de todas las posiciones** (`Bruto
+  +X · Neto +Y`, con tooltip del desglose): neto = bruto − comisión pagada − funding cobrado −
+  salida estimada (taker). Sale de `mexc.neto_posicion()` / `mexc.resumen_pnl()` (puras).
+  Las filas no cambian.
+- El botón **Poner a BE** abre un modal con una fila por posición: checkbox, broker, lado,
+  entrada/precio/BE y PnL; las que no se pueden (el BE no quedó del lado de la pérdida, o ya
+  está puesto) salen **apagadas con el motivo**. `Todos` marca los seleccionables y el botón
+  ejecuta solo los marcados, conservando el TP actual (`Control.be_todas` → `_aplicar_tpsl`,
+  el mismo camino del lápiz, con 600 ms entre posiciones).
 - La **IP** se consulta al arrancar y se **revalida cada 15 min** (`IP_SEG`) desde el poller,
   porque la key de MEXC/Bitunix está atada a la IP y el ISP la rota: la cabecera avisa sola.
 - En la tabla de posiciones la columna del par lleva el ticker y, debajo, el **wordmark del
@@ -539,7 +584,8 @@ en la cabecera con botón para copiarla.
   para saber si una fila abre o cierra. Un cierre que no encuentra apertura (posición
   anterior a la ventana de 50 órdenes) sale como fila `Cerrada` con entrada `—`.
   Columnas en `OPER_COLS` (`layout.py`): apertura, cierre, par (con el wordmark del broker
-  vía `CeldaPar` compacta), lado, tamaño, entrada, salida, PnL, fee, neto y estado.
+  vía `CeldaPar` compacta), lado, **tamaño en USDT** (`cantidad × entrada`, `_tamano_usdt`),
+  entrada, salida, PnL, fee, neto y estado.
   `Session.cargar_historial` mezcla los dos brokers y publica ya agrupado.
 - Las operaciones se **guardan en `operaciones.json`** (`archivo.Archivo`): `cargar_historial`
   fusiona lo que trae el broker con lo archivado y publica el resultado, así que lo que ya

@@ -46,7 +46,7 @@ from ..layout import (
     ROW_H,
     STATES,
 )
-from ..mexc import fee_desglose
+from ..mexc import fee_desglose, resumen_pnl
 from ..paths import ASSETS
 from ..session import Session
 from . import dialogs
@@ -62,6 +62,15 @@ PRESETS = (1, 5, 10, 15, 20, 50)
 
 
 BROKERS = NOMBRES
+
+
+def _tamano_usdt(fila):
+    """Tamano de la operacion en USDT (cantidad por el precio de entrada)."""
+    cantidad = float(fila.get("qty") or fila.get("abierta") or fila.get("cerrada") or 0)
+    precio = float(fila.get("entrada") or fila.get("salida") or 0)
+    if not (cantidad and precio):
+        return "—"
+    return f"{t.fmt_usdt(cantidad * precio)} USDT"
 
 
 def _cuando(ms):
@@ -98,6 +107,7 @@ class CeldaLapiz(QWidget):
     def __init__(self, partes, accion, fondo, vertical=False):
         super().__init__()
         self._accion = accion
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {fondo};")
         fila = QHBoxLayout(self)
         fila.setContentsMargins(6, 0, 6, 0)
@@ -136,6 +146,11 @@ class CeldaLapiz(QWidget):
             else:
                 etiqueta.hide()
 
+    def set_fondo(self, color):
+        """Color de la fila: cambia cuando la posicion se mueve de lugar."""
+        if self.styleSheet() != f"background: {color};":
+            self.setStyleSheet(f"background: {color};")
+
     def set_accion(self, accion):
         """Se reasigna en cada refresco: la celda no puede quedarse con el dato viejo."""
         self._accion = accion
@@ -146,6 +161,7 @@ class CeldaPar(QWidget):
 
     def __init__(self, nombre, exchange, fondo, compacta=False):
         super().__init__()
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {fondo};")
         self._compacta = bool(compacta)
         alto = 2 if compacta else 8
@@ -159,6 +175,10 @@ class CeldaPar(QWidget):
         columna.addWidget(self.lbl_marca)
         columna.addStretch(1)
         self.set_datos(nombre, exchange)
+
+    def set_fondo(self, color):
+        if self.styleSheet() != f"background: {color};":
+            self.setStyleSheet(f"background: {color};")
 
     def set_datos(self, nombre, exchange):
         self.lbl_nombre.setText(str(nombre))
@@ -251,6 +271,7 @@ class VistaQt(QMainWindow):
         marca.setStyleSheet("background: transparent;")
         fila.addWidget(marca, 0, Qt.AlignVCenter)
         numero = _etiqueta("—", 13, True)
+        numero.setToolTip("Saldo en vivo: balance + PnL no realizado de las posiciones")
         fila.addWidget(numero, 0, Qt.AlignVCenter)
         fila.addWidget(_etiqueta("USDT", 13, True), 0, Qt.AlignVCenter)
         self._caja_saldos.addWidget(caja)
@@ -477,7 +498,16 @@ class VistaQt(QMainWindow):
         barra_pos = QHBoxLayout()
         self._lbl_abiertas = _etiqueta("0 abiertas", 11, muted=True)
         barra_pos.addWidget(self._lbl_abiertas)
+        # bruto y neto de TODAS las posiciones abiertas (las filas no cambian)
+        self._lbl_bruto = _etiqueta("", 11, True, t.MUTED)
+        barra_pos.addWidget(self._lbl_bruto)
+        barra_pos.addWidget(_etiqueta("·", 11, False, t.MUTED))
+        self._lbl_neto = _etiqueta("", 11, True, t.MUTED)
+        barra_pos.addWidget(self._lbl_neto)
         barra_pos.addStretch(1)
+        self._btn_be = _boton("Poner a BE", 110, 26)
+        self._btn_be.clicked.connect(lambda: self.control.be_todas(self._posiciones))
+        barra_pos.addWidget(self._btn_be)
         self._btn_sel = _boton("Cerrar seleccionadas", 170, 26)
         self._btn_sel.clicked.connect(self._cerrar_seleccionadas)
         barra_pos.addWidget(self._btn_sel)
@@ -711,27 +741,38 @@ class VistaQt(QMainWindow):
         barra_oscura(self)
 
     def _pintar_deck(self, tarjetas):
-        for viejo in self._lienzo.findChildren(QWidget):
-            viejo.deleteLater()
-        self._tarjetas = {}
-        self._cartas = []
+        """Crea solo las tarjetas nuevas y reusa las que siguen.
+
+        Antes se borraban todas: al añadir un par se reconstruia el deck entero
+        y se perdia lo escrito en el tamaño, TP y SL de las demas cajas.
+        """
+        viejas = dict(self._tarjetas)
+        clientes = dict(self.session.clientes())
+        orden = []
+        for datos in tarjetas:
+            widget = viejas.pop(datos["id"], None)
+            if widget is None:
+                widget = Tarjeta(
+                    datos,
+                    clientes,
+                    on_trade=self._trade,
+                    on_remove=self._quitar_par,
+                    on_broker=self._cambio_broker,
+                    on_arrastre=self._arrastre_tarjeta,
+                )
+                widget.setParent(self._lienzo)
+                widget.show()
+            orden.append(widget)
+        for sobrante in viejas.values():
+            sobrante.hide()
+            sobrante.deleteLater()
+        self._tarjetas = {
+            datos["id"]: widget for datos, widget in zip(tarjetas, orden, strict=True)
+        }
+        self._cartas = orden
         self._anims = {}
         self._arrastrada = None
         self._destino = None
-        clientes = dict(self.session.clientes())
-        for tarjeta in tarjetas:
-            widget = Tarjeta(
-                tarjeta,
-                clientes,
-                on_trade=self._trade,
-                on_remove=self._quitar_par,
-                on_broker=self._cambio_broker,
-                on_arrastre=self._arrastre_tarjeta,
-            )
-            widget.setParent(self._lienzo)
-            widget.show()
-            self._tarjetas[tarjeta["id"]] = widget
-            self._cartas.append(widget)
         self._ubicar(animar=False)
 
     def _cambio_broker(self, tarjeta, nombre):
@@ -924,6 +965,7 @@ class VistaQt(QMainWindow):
                         tabla.setCellWidget(fila, columna, CeldaPar(nombre, exchange, fondo_fila))
                     else:
                         tabla.cellWidget(fila, columna).set_datos(nombre, exchange)
+                    tabla.cellWidget(fila, columna).set_fondo(fondo_fila)
                 elif clave in PENCIL_COLS:
                     if rehacer:
                         tabla.setCellWidget(
@@ -934,6 +976,7 @@ class VistaQt(QMainWindow):
                     # el lapiz tiene que abrir SIEMPRE el dato de esta fila, no el
                     # que habia cuando se creo el widget (por eso reabria el TP viejo)
                     celda = tabla.cellWidget(fila, columna)
+                    celda.set_fondo(fondo_fila)
                     celda.set_partes(valores[clave])
                     celda.set_accion(
                         (lambda f=fila: self._editar_tpsl(f))
@@ -963,7 +1006,27 @@ class VistaQt(QMainWindow):
                 )
             else:
                 tabla.cellWidget(fila, acciones).actualizar(position, pnl, largo)
+            tabla.cellWidget(fila, acciones).set_fondo(fondo_fila)
         self._lbl_abiertas.setText(f"{len(posiciones)} abiertas")
+        self._pintar_resumen(posiciones)
+
+    def _pintar_resumen(self, posiciones):
+        """Bruto y neto de todas las posiciones, en la barra de la tabla."""
+        resumen = resumen_pnl(posiciones)
+        bruto = resumen["bruto"]
+        neto = resumen["neto"]
+        self._lbl_bruto.setText(f"Bruto {t.fmt_pnl(bruto)} USDT")
+        self._lbl_neto.setText(f"Neto {t.fmt_pnl(neto)} USDT")
+        self._lbl_bruto.setStyleSheet(f"color: {t.GREEN if bruto >= 0 else t.RED};")
+        self._lbl_neto.setStyleSheet(f"color: {t.GREEN if neto >= 0 else t.RED};")
+        detalle = (
+            f"Comisión pagada −{t.fmt_fee(resumen['comision'])}\n"
+            f"Funding cobrado −{t.fmt_fee(resumen['funding'])}\n"
+            f"Salida estimada (taker) −{t.fmt_fee(resumen['salida'])}\n"
+            f"Neto {t.fmt_pnl(neto)} USDT"
+        )
+        self._lbl_bruto.setToolTip(detalle)
+        self._lbl_neto.setToolTip(detalle)
 
     def _texto_stops(self, position, escala):
         """TP y SL en una linea: `81,000.00 / 71,000.00`, y `--` donde no hay nivel."""
@@ -1098,14 +1161,12 @@ class VistaQt(QMainWindow):
             neto = pnl - fee
             estado = fila.get("estado") or ""
             cierre = fila.get("cierre") or 0
-            abierta = float(fila.get("abierta") or 0)
-            cerrada = float(fila.get("cerrada") or 0)
             lado = fila.get("lado") or "—"
             valores = {
                 "apertura": lineas((_cuando(fila.get("apertura")), 12, False, t.MUTED)),
                 "cierre": lineas((_cuando(cierre) if cierre else "—", 12, False, t.MUTED)),
                 "lado": lineas((lado, 12, True, t.GREEN if lado == "LONG" else t.RED)),
-                "qty": lineas((t.fmt_qty(abierta or cerrada), 12, False, t.TEXT)),
+                "qty": lineas((_tamano_usdt(fila), 12, False, t.TEXT)),
                 "entrada": lineas(
                     (
                         t.fmt_price(fila.get("entrada")) if fila.get("entrada") else "—",

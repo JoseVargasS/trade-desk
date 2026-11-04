@@ -59,6 +59,11 @@ class FakePort:
     def editar_orden(self, orden, contrato, a_vol):
         return None
 
+    def be_lista(self, filas):
+        """Lo que devuelve la ventana de BE: los ids elegidos o None."""
+        self.filas_be = filas
+        return self.elegidas_be
+
     def status(self, texto):
         self.mensajes.append(texto)
 
@@ -157,3 +162,96 @@ def test_el_break_even_no_se_guarda_como_tp_si_el_precio_se_movio(app, posicion)
 
     assert app.mx.sent == []
     assert avisos and "break-even" in avisos[0].lower()
+
+
+def test_bingx_coloca_el_tpsl_sin_tpsl_list(app, posicion):
+    """BingX no tiene `tpsl_list`: el worker no debe pedirlo o no coloca nada.
+
+    Era el bug real: el worker llamaba `mx.tpsl_list()` siempre y en BingX tiraba
+    AttributeError antes de mandar el TP/SL (el break-even no se colocaba).
+    """
+    llamadas = []
+
+    class FakeBingx:
+        def price(self, symbol):
+            return 3900.0
+
+        def tpsl_place(self, position_id, vol, tp, sl, simbolo=None):
+            llamadas.append((position_id, vol, tp, sl, simbolo))
+            return []
+
+    bingx = FakeBingx()
+    app.session.cliente = lambda nombre: bingx if nombre == "bingx" else None
+
+    app._tpsl_worker(dict(posicion, _exchange="bingx"), None, 3800.0)
+
+    assert not hasattr(bingx, "tpsl_list"), "el fake imita a BingX"
+    assert llamadas, "BingX tiene que recibir el TP/SL"
+    assert llamadas[0][0] == posicion["positionId"]
+    assert llamadas[0][3] == 3800.0
+
+
+def test_bingx_borra_el_tpsl_cuando_los_campos_estan_vacios(app, posicion):
+    """Sacar el TP y el SL tiene que borrar las condicionales.
+
+    En BingX las cancela `tpsl_place`, asi que con los dos campos vacios hay que
+    llamarlo igual: antes no se llamaba y el SL quedaba pegado en el broker.
+    """
+    llamadas = []
+
+    class FakeBingx:
+        def price(self, symbol):
+            return 3900.0
+
+        def tpsl_place(self, position_id, vol, tp, sl, simbolo=None):
+            llamadas.append((position_id, tp, sl))
+            return []
+
+    bingx = FakeBingx()
+    app.session.cliente = lambda nombre: bingx if nombre == "bingx" else None
+
+    app._tpsl_worker(dict(posicion, _exchange="bingx"), None, None)
+
+    assert llamadas == [(posicion["positionId"], None, None)]
+
+
+def test_be_todas_pone_el_sl_de_las_elegidas_sin_cerrar(app, posicion):
+    """El BE masivo mueve el SL, no cierra: la orden de cierre no se manda."""
+    # el break-even de esta posicion queda en ~4104,65: el precio tiene que estar arriba
+    app.mx._fake_price = 4200.0
+    app.session.precios["XAU_USDT"] = 4200.0
+    pos = dict(posicion, markPrice=4200.0)
+    app.port.elegidas_be = [str(pos["positionId"])]
+
+    app.be_todas([pos])
+
+    rutas = [ruta for ruta, _ in app.mx.sent]
+    assert any(ruta.endswith("/stoporder/place") for ruta in rutas)
+    assert not any(ruta.endswith("/order/create") for ruta in rutas), "no debe cerrar"
+    stop = app.mx.sent[-1][1]
+    assert stop["stopLossPrice"] > posicion["holdAvgPrice"]
+
+
+def test_be_todas_marca_las_que_no_llegan_y_no_hace_nada(app, posicion):
+    """Si el precio no llegó al break-even, la fila sale apagada y no se toca."""
+    app.mx._fake_price = 3900.0
+    app.session.precios["XAU_USDT"] = 3900.0  # por debajo del break-even
+    pos = dict(posicion, markPrice=3900.0)
+    app.port.elegidas_be = []
+
+    app.be_todas([pos])
+
+    fila = app.port.filas_be[0]
+    assert fila["puede"] is False
+    assert "break-even" in fila["motivo"]
+    assert app.mx.sent == []
+
+
+def test_be_todas_cancelado_no_manda_nada(app, posicion):
+    app.mx._fake_price = 4200.0
+    app.session.precios["XAU_USDT"] = 4200.0
+    app.port.elegidas_be = None
+
+    app.be_todas([dict(posicion, markPrice=4200.0)])
+
+    assert app.mx.sent == []

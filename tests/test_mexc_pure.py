@@ -11,8 +11,11 @@ from tradedesk.mexc import (
     display_name,
     fee_desglose,
     mark_price,
+    neto_posicion,
     plan_tp_sl,
     pnl_en_precio,
+    precio_por_pnl,
+    resumen_pnl,
 )
 
 
@@ -154,3 +157,83 @@ def test_break_even_short_va_debajo_y_redondea_hacia_afuera():
 def test_break_even_sin_tamano_no_inventa_un_precio():
     assert break_even_price(_pos(holdVol=0), True) == (None, 0.0)
     assert break_even_price(_pos(holdAvgPrice=0), True) == (None, 0.0)
+
+
+def test_precio_por_pnl_es_sobre_el_margen():
+    """El % del TP/SL se mide sobre el margen: 15% a 10x = 1,5% de precio."""
+    assert precio_por_pnl(100.0, "15", 10, True, 2) == "101.50"
+    assert precio_por_pnl(100.0, "-15", 10, True, 2) == "98.50"
+    assert precio_por_pnl(100.0, "15", 10, False, 2) == "98.50"
+    assert precio_por_pnl(100.0, "-8", 10, False, 2) == "100.80"
+    assert precio_por_pnl(100.0, "7,5", 5, True, 2) == "115.00"
+
+
+def test_precio_por_pnl_sin_datos_no_inventa():
+    assert precio_por_pnl(100.0, "", 10, True) == ""
+    assert precio_por_pnl(100.0, "abc", 10, True) == ""
+    assert precio_por_pnl(0, "15", 10, True) == ""
+    # -200% a 10x sería un precio negativo: no se inventa nada
+    assert precio_por_pnl(100.0, "-2000", 10, True) == ""
+
+
+def test_neto_descuenta_comision_funding_y_salida():
+    """Neto = bruto − comisión pagada − funding − salida estimada."""
+    pos = {
+        "unRealizedPnl": 10.0,
+        "totalFee": 1.0,
+        "holdFee": 0.5,
+        "holdVol": 1.0,
+        "_contractSize": 1.0,
+        "holdAvgPrice": 1000.0,
+        "_takerRate": 0.001,
+    }
+    fila = neto_posicion(pos)
+    assert round(fila["comision"], 4) == 1.0
+    assert round(fila["funding"], 4) == 0.5
+    assert round(fila["salida"], 4) == 1.0  # 1000 de nocional por la tasa
+    assert round(fila["neto"], 4) == 7.5
+
+
+def test_neto_sin_taker_usa_la_tasa_efectiva_de_la_comision():
+    pos = {
+        "unRealizedPnl": 10.0,
+        "totalFee": 2.0,
+        "holdVol": 1.0,
+        "_contractSize": 1.0,
+        "holdAvgPrice": 1000.0,
+    }
+    fila = neto_posicion(pos)
+    # tasa efectiva 2/1000 = 0.002 -> salida 2.0
+    assert round(fila["salida"], 4) == 2.0
+    assert round(fila["neto"], 4) == 6.0
+
+
+def test_resumen_pnl_suma_todas_las_posiciones():
+    una = {
+        "unRealizedPnl": 10.0,
+        "totalFee": 1.0,
+        "holdVol": 1.0,
+        "holdAvgPrice": 1000.0,
+        "_contractSize": 1.0,
+        "_takerRate": 0.001,
+    }
+    otra = {
+        "unRealizedPnl": -4.0,
+        "totalFee": 1.0,
+        "holdVol": 1.0,
+        "holdAvgPrice": 1000.0,
+        "_contractSize": 1.0,
+        "_takerRate": 0.001,
+    }
+    total = resumen_pnl([una, otra])
+    assert total["cuantas"] == 2
+    assert round(total["bruto"], 4) == 6.0
+    # por posición: comisión 1 + salida 1 (sin funding) = 2
+    assert round(total["costo"], 4) == 4.0
+    assert round(total["neto"], 4) == 2.0
+
+
+def test_resumen_pnl_vacio_no_rompe():
+    total = resumen_pnl([])
+    assert total["cuantas"] == 0
+    assert total["neto"] == 0.0

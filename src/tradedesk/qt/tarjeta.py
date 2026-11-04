@@ -198,6 +198,13 @@ class PanelPct(QDialog):
         self.adjustSize()
         self._deslizar(int(barra.pct))
 
+    def leaveEvent(self, evento):
+        """Se cierra al salir el mouse: si queda abierto, es un popup y el
+        primer clic en Cerrar lo cierra a el en vez de abrir el dialogo."""
+        if QApplication.mouseButtons() == Qt.NoButton:
+            self.close()
+        super().leaveEvent(evento)
+
     def _deslizar(self, valor):
         self.barra.set_pct(valor)
         # si el % quedo por debajo del minimo que cierra 1 contrato, la bolita
@@ -252,6 +259,7 @@ class BarraCierre(QWidget):
         self.notional = 0.0
         self.paso = 1.0
         self.unidad = "contratos"
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedSize(190, 52)
         fila1 = QHBoxLayout()
         fila1.setSpacing(4)
@@ -277,6 +285,11 @@ class BarraCierre(QWidget):
         self.actualizar(position, pnl, largo)
 
     # ------------------------------------------------------------------ estado
+    def set_fondo(self, color):
+        """Color de la fila de la tabla (cambia cuando la posicion se mueve)."""
+        if self.styleSheet() != f"background: {color};":
+            self.setStyleSheet(f"background: {color};")
+
     def actualizar(self, position, pnl, largo):
         """Refresca datos y color sin recrear la barra: el `%` elegido se mantiene."""
         self.position = position
@@ -288,6 +301,18 @@ class BarraCierre(QWidget):
         color = t.GREEN if pnl > 0 else (t.RED if pnl < 0 else t.INPUT)
         self.btn_cerrar.setText(f"Cerrar {'LONG' if largo else 'SHORT'}")
         self.btn_cerrar.setStyleSheet(_estilo_boton(color, t.BG if pnl else t.TEXT))
+        # una posicion de una sola unidad no se puede partir: el chip avisa
+        # en vez de dejar mover el slider y que vuelva solo (parecia roto)
+        partir = self.min_pct() < 100.0
+        self.btn_pct.setEnabled(partir)
+        self.btn_pct.setToolTip(
+            ""
+            if partir
+            else (
+                f"La posicion esta en el minimo del par ({t.fmt_qty(self.paso)}): "
+                "no se puede cerrar por partes, solo el 100%."
+            )
+        )
 
     def min_pct(self):
         """% mínimo que todavía cierra una unidad (un contrato o un step del par)."""
@@ -300,7 +325,15 @@ class BarraCierre(QWidget):
         self.btn_pct.setText(f"{self.pct:.0f}%")
 
     def _abrir_pct(self):
+        # sin `exec()`: el panel es modal y se comia el clic en Cerrar (se
+        # elegia 30% y al pulsar Cerrar no pasaba nada). Con `show()` el resto
+        # de la ventana sigue viva y el panel se cierra solo al salir.
+        abierto = getattr(self, "_panel", None)
+        if abierto is not None and abierto.isVisible():
+            abierto.close()
+            return
         panel = PanelPct(self)
+        self._panel = panel
         punto = self.btn_pct.mapToGlobal(QPoint(0, 0))
         ancho, alto = panel.width(), panel.height()
         pantalla = self.screen().availableGeometry()
@@ -312,7 +345,7 @@ class BarraCierre(QWidget):
         if y < pantalla.top() + 4:
             y = punto.y() + self.btn_pct.height() + 6
         panel.move(x, y)
-        panel.exec()
+        panel.show()
 
     def _menu_tipo(self):
         menu = QMenu(self)

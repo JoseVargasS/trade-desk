@@ -185,7 +185,15 @@ class Control:
         if pct < 100:
             rows.append(("Queda", f"{100 - pct:.0f}% abierto"))
         warn = "Orden límite: puede quedar sin llenar." if price else "Se cierra a mercado."
+        # se deja rastro de lo que se manda: asi un parcial que "no hace nada"
+        # se puede seguir en la barra y en trades.log
+        unidad = "contratos" if (pos.get("_exchange") or "mexc") == "mexc" else "monedas"
+        self.port.status(f"Cerrar {pct:.0f}% · {t.fmt_qty(vol)} {unidad} de {pos.get('symbol')}")
+        self.session.log(
+            f"cierre {pos.get('symbol')} {pct:.0f}% vol={vol} ({pos.get('_exchange')})"
+        )
         if not self.port.confirm("Cerrar posicion", rows=rows, warn=warn, danger=True, ok="Cerrar"):
+            self.port.status("Cierre cancelado")
             return
         threading.Thread(
             target=self._do_cerrar, args=([pos],), kwargs={"vol": vol, "price": price}, daemon=True
@@ -312,20 +320,28 @@ class Control:
         es_be = bool(sl and be and abs(sl - be) < 0.5 * 10**-escala)
         threading.Thread(target=self._tpsl_worker, args=(pos, tp, sl, es_be), daemon=True).start()
 
-    def _tpsl_worker(self, pos, tp, sl, es_be=False):
+    def _aplicar_tpsl(self, pos, tp, sl, es_be=False):
+        """Coloca el TP/SL de una posicion. Lanza si el broker lo rechaza.
+
+        Lo usan el lapiz (que envuelve con dialogos) y el "poner a BE" masivo.
+        """
         symbol = pos.get("symbol")
         mx = self.broker_de(pos)
-        try:
-            price = mx.price(symbol)
-            long_ = int(pos.get("positionType") or 1) == 1
-            if es_be and sl and (sl > price if long_ else sl < price):
-                # sin esta guarda plan_tp_sl lo guardaria como TP
-                raise MexcError(
-                    "El precio se movio y el break-even ya no cubre las comisiones. Reintenta."
-                )
-            # el TP/SL se mide contra el precio actual, no contra la entrada
-            tp, sl, avisos = plan_tp_sl(long_, price, tp, sl)
-            # se cancelan TODOS los stop de la posicion: un id viejo deja duplicados
+        price = mx.price(symbol)
+        long_ = int(pos.get("positionType") or 1) == 1
+        if es_be and sl and (sl > price if long_ else sl < price):
+            # sin esta guarda plan_tp_sl lo guardaria como TP
+            raise MexcError(
+                "El precio se movio y el break-even ya no cubre las comisiones. Reintenta."
+            )
+        # el TP/SL se mide contra el precio actual, no contra la entrada
+        tp, sl, avisos = plan_tp_sl(long_, price, tp, sl)
+        # BingX no tiene stop orders por posicion: `tpsl_place` cancela sus
+        # condicionales y pone las nuevas, sin ids que esperar. Con `tpsl_list`
+        # (MEXC y Bitunix) se cancelan todos los stops de la posicion porque un
+        # id viejo deja duplicados.
+        es_bingx = (pos.get("_exchange") or "mexc") == "bingx"
+        if not es_bingx:
             ids = [
                 o.get("id")
                 for o in mx.tpsl_list()
@@ -342,17 +358,91 @@ class Control:
                 raise MexcError(
                     "El broker todavía está cancelando la orden anterior. Reintenta en un segundo."
                 )
-            if tp or sl:
-                mx.tpsl_place(pos["positionId"], pos["holdVol"], tp, sl, simbolo=pos.get("symbol"))
-            self.session.log(f"OK  tpsl {symbol} tp={tp} sl={sl} ({pos.get('_exchange')})")
-            msg = f"TP/SL actualizado · {symbol}"
-            self.q.put(("closed", msg))
+        if tp or sl:
+            mx.tpsl_place(pos["positionId"], pos["holdVol"], tp, sl, simbolo=pos.get("symbol"))
+        elif es_bingx:
+            # borrar el TP/SL: en BingX las condicionales las cancela
+            # `tpsl_place`, asi que hay que llamarlo aunque no se ponga nada
+            mx.tpsl_place(pos["positionId"], pos["holdVol"], None, None, simbolo=pos.get("symbol"))
+        self.session.log(f"OK  tpsl {symbol} tp={tp} sl={sl} ({pos.get('_exchange')})")
+        return avisos
+
+    def _tpsl_worker(self, pos, tp, sl, es_be=False):
+        symbol = pos.get("symbol")
+        try:
+            avisos = self._aplicar_tpsl(pos, tp, sl, es_be)
+            self.q.put(("closed", f"TP/SL actualizado · {symbol}"))
             if avisos:
                 self.q.put(("notice", ("SL en ganancia", "\n\n".join(avisos), False)))
         except Exception as e:
             self.session.log(f"ERR tpsl {symbol}: {e}")
             self.q.put(("closed", f"Error TP/SL: {e}"))
             self.q.put(("notice", ("TP / SL rechazado", str(e), True)))
+        self.session.refresh_positions()
+
+    def be_todas(self, posiciones):
+        """Pone a BE las posiciones que el usuario elija en la ventana."""
+        if not posiciones:
+            self.port.status("No hay posiciones abiertas.")
+            return
+        filas = [self._fila_be(pos) for pos in posiciones]
+        elegidas = self.port.be_lista(filas)
+        if not elegidas:
+            return
+        ids = {str(ident) for ident in elegidas}
+        threading.Thread(target=self._be_worker, args=(posiciones, ids), daemon=True).start()
+
+    def _fila_be(self, pos):
+        """Lo que muestra la ventana de BE: precio, break-even y si se puede."""
+        symbol = pos.get("symbol")
+        largo = int(pos.get("positionType") or 1) == 1
+        escala = int(pos.get("_priceScale") or 2)
+        precio = mark_price(pos) or self.session.precios.get(symbol) or 0
+        be, _ = break_even_price(pos, largo)
+        sl = float(pos.get("_sl") or 0)
+        motivo = ""
+        if not be:
+            motivo = "sin datos de entrada"
+        elif not precio:
+            motivo = "sin precio"
+        elif be > precio if largo else be < precio:
+            motivo = "todavía no llega al break-even"
+        elif sl and abs(sl - be) <= max(10.0**-escala, 1e-12):
+            motivo = "BE ya colocado"
+        return {
+            "id": str(pos.get("positionId")),
+            "nombre": pos.get("_name") or symbol or "",
+            "broker": pos.get("_exchange") or "mexc",
+            "lado": "LONG" if largo else "SHORT",
+            "pnl": float(pos.get("unRealizedPnl") or 0),
+            "entrada": float(pos.get("holdAvgPrice") or 0),
+            "precio": float(precio or 0),
+            "be": float(be or 0),
+            "escala": escala,
+            "puede": not motivo,
+            "motivo": motivo,
+        }
+
+    def _be_worker(self, posiciones, ids):
+        total = len(ids)
+        hechas, fallos = 0, []
+        for pos in posiciones:
+            if str(pos.get("positionId")) not in ids:
+                continue
+            nombre = pos.get("_name") or pos.get("symbol") or ""
+            try:
+                fila = self._fila_be(pos)
+                tp = float(pos.get("_tp") or 0) or None
+                self._aplicar_tpsl(pos, tp, fila["be"], True)
+                hechas += 1
+            except Exception as exc:
+                fallos.append(f"{nombre}: {exc}")
+            self.q.put(("closed", f"BE {hechas}/{total} · {nombre}"))
+            time.sleep(0.6)
+        self.session.log(f"OK  be {hechas}/{total} ({len(fallos)} fallos)")
+        self.q.put(("closed", f"BE aplicado en {hechas} de {total} posiciones"))
+        if fallos:
+            self.q.put(("notice", ("BE incompleto", "\n".join(fallos), True)))
         self.session.refresh_positions()
 
     def _wait_tpsl_clear(self, mx, position_id, timeout=2.5):

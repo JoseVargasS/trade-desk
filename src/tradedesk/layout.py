@@ -7,7 +7,9 @@ se toca ninguno (la fila de posiciones no crece).
 # -------------------------------------------------------------- posiciones
 POS_COLS = (
     ("par", "Par", 132, "w"),
-    ("lado", "Lado", 74, "w"),
+    # 96 px: "100X SHORT" mide 81 px y el delegado deja 6 de cada lado; con 74
+    # se cortaba en "10X SHOR"
+    ("lado", "Lado", 96, "w"),
     ("apertura", "Apertura", 84, "w"),
     ("pos", "Posición", 112, "e"),
     ("entrada", "Entrada", 94, "e"),
@@ -29,7 +31,7 @@ OPER_COLS = (
     ("cierre", "Cierre", 142, "w"),
     ("par", "Par", 132, "w"),
     ("lado", "Lado", 74, "w"),
-    ("qty", "Tamaño", 104, "e"),
+    ("qty", "Tamaño (USDT)", 128, "e"),
     ("entrada", "Entrada", 110, "e"),
     ("salida", "Salida", 110, "e"),
     ("pnl", "PnL", 118, "e"),
