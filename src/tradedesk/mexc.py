@@ -151,11 +151,77 @@ def mark_price(position):
     return entry + (float(position.get("unRealizedPnl") or 0) / (qty * size)) * signo
 
 
+def precio_por_pnl(entrada, pct, apalancamiento, largo, escala=2):
+    """Precio que deja ese % de PnL **sobre el margen** (TP/SL por porcentaje).
+
+    PnL% = (salida - entrada) / entrada * apalancamiento * 100, así que
+    precio = entrada * (1 ± pct / (100 * lev)). Un SL se escribe en negativo.
+    """
+    try:
+        base = float(entrada or 0)
+        porcentaje = float(str(pct if pct not in (None, "") else "0").replace(",", "").strip())
+        palanca = max(1.0, float(apalancamiento or 1))
+    except (TypeError, ValueError):
+        return ""
+    if not base or not porcentaje:
+        return ""
+    signo = 1 if largo else -1
+    precio = base * (1 + signo * porcentaje / (100.0 * palanca))
+    if precio <= 0:
+        return ""
+    return f"{precio:.{int(escala)}f}"
+
+
 def pnl_en_precio(position, long_, precio):
     """Lo que se gana (o pierde) si la posicion se cerrara en `precio`, sin fees."""
     coins = float(position.get("holdVol") or 0) * float(position.get("_contractSize") or 0)
     entry = float(position.get("holdAvgPrice") or 0)
     return coins * (float(precio) - entry) * (1 if long_ else -1)
+
+
+def neto_posicion(posicion, taker=None):
+    """PnL bruto, costos y neto de una posicion abierta.
+
+    `neto = pnl - comision pagada - funding cobrado - salida estimada`, con la
+    salida estimada como el nocional por la tasa taker. Si no se pasa la tasa se
+    usa la efectiva de la comision pagada, que es como la estima el globo de la
+    fee. Sirve para los tres brokers: son los mismos campos ya decorados.
+    """
+    pnl = float(posicion.get("unRealizedPnl") or 0)
+    detalle = fee_desglose(posicion)
+    cantidad = float(posicion.get("holdVol") or 0)
+    tamano = float(posicion.get("_contractSize") or 0)
+    entrada = float(posicion.get("holdAvgPrice") or 0)
+    nocional = cantidad * tamano * entrada
+    comision = float(detalle.get("comision") or 0)
+    funding = float(detalle.get("funding") or 0)
+    tasa = taker if taker is not None else posicion.get("_takerRate")
+    if tasa is None and nocional:
+        tasa = comision / nocional
+    salida = nocional * float(tasa or 0)
+    costo = comision + funding + salida
+    return {
+        "bruto": pnl,
+        "comision": comision,
+        "funding": funding,
+        "salida": salida,
+        "costo": costo,
+        "neto": pnl - costo,
+    }
+
+
+def resumen_pnl(posiciones):
+    """Bruto y neto de todas las posiciones abiertas, juntos."""
+    total = {"bruto": 0.0, "comision": 0.0, "funding": 0.0, "salida": 0.0, "costo": 0.0}
+    cuantas = 0
+    for posicion in posiciones or ():
+        fila = neto_posicion(posicion)
+        for clave in total:
+            total[clave] += fila[clave]
+        cuantas += 1
+    total["neto"] = total["bruto"] - total["costo"]
+    total["cuantas"] = cuantas
+    return total
 
 
 def break_even_price(position, long_):
@@ -432,6 +498,13 @@ class Mexc:
         for fila in self.assets():
             if str(fila.get("currency") or "").upper() == currency:
                 return float(fila.get("availableBalance") or 0)
+        return 0.0
+
+    def saldo(self, currency="USDT"):
+        """Saldo de la cuenta en futuros (`equity` = balance + PnL no realizado)."""
+        for fila in self.assets():
+            if str(fila.get("currency") or "").upper() == currency:
+                return float(fila.get("equity") or fila.get("cashBalance") or 0)
         return 0.0
 
     def funding(self, symbol):

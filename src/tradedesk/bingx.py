@@ -88,6 +88,15 @@ def _texto(fila, *claves, defecto=""):
 
 
 # ---------------------------------------------------------------- decoradores
+def _apalancamiento(valor):
+    """BingX manda el apalancamiento como `"10X"`; la app lo pinta con `int()`."""
+    texto = str(valor if valor is not None else "").strip().upper().rstrip("X")
+    try:
+        return int(float(texto.replace(",", "")))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _lado(posicion):
     """(positionType, lado) con la convencion de la app: 1 long, 2 short."""
     side = _texto(posicion, "positionSide").upper()
@@ -145,7 +154,7 @@ def decorate_positions(bingx, posiciones, condicionales=(), comisiones=None):
                 "holdAvgPrice": entrada,
                 "unRealizedPnl": _numero(posicion, "unrealizedProfit", "unrealizedPnl"),
                 "liquidatePrice": _numero(posicion, "liquidationPrice", "liqPrice"),
-                "leverage": int(_numero(posicion, "leverage", defecto=1) or 1),
+                "leverage": _apalancamiento(posicion.get("leverage")) or 1,
                 "marginRatio": _numero(posicion, "riskRate", "marginRate"),
                 "im": _numero(posicion, "margin", "isolatedMargin"),
                 "totalFee": float((comisiones or {}).get(str(posicion.get("positionId")), 0.0)),
@@ -191,6 +200,7 @@ def decorate_orders(bingx, ordenes):
                 "price": _numero(orden, "price"),
                 "profit": _numero(orden, "profit"),
                 "totalFee": abs(_numero(orden, "commission", "fee")),
+                "leverage": _apalancamiento(orden.get("leverage")),
                 "state": 3 if _texto(orden, "status").upper() in ("FILLED",) else 1,
                 "createTime": int(_numero(orden, "time", "createTime", "updateTime")),
                 "_exchange": "bingx",
@@ -292,7 +302,11 @@ class Bingx:
         crudo = self._contratos.get(symbol) or {}
         return {
             **crudo,
-            "contractSize": _numero(crudo, "size", defecto=1.0) or 1.0,
+            # `quantity` va en **monedas** (0,0388 = 0,0388 BTC), asi que el
+            # tamano de contrato es 1. El `size` de BingX es el valor de un
+            # contrato en monedas; usarlo aca multiplicaba el nocional y el
+            # mark price por 10.000 (posicion en negativo y mark price absurdo).
+            "contractSize": 1.0,
             "priceScale": int(_numero(crudo, "pricePrecision", defecto=2) or 2),
             "volUnit": 1,
             "minQty": _numero(crudo, "tradeMinQuantity", "tradeMinLimit", defecto=0.0001),
@@ -308,6 +322,13 @@ class Bingx:
         if isinstance(datos, dict) and isinstance(datos.get("balance"), dict):
             return [datos["balance"]]
         return _filas(datos)
+
+    def saldo(self, moneda="USDT"):
+        """Saldo en vivo de la cuenta: `equity` = balance + PnL no realizado."""
+        for fila in self.balance():
+            if str(fila.get("asset") or fila.get("currency") or "").upper() == moneda:
+                return _numero(fila, "equity", "balance")
+        return 0.0
 
     def available(self, moneda="USDT"):
         for fila in self.balance():
@@ -590,7 +611,12 @@ class Bingx:
                         "positionSide": lado,
                         "type": tipo,
                         "stopPrice": _texto_precio(precio),
+                        # `closePosition` cierra la posicion ENTERA al dispararse
+                        # (en la app de BingX sale como "Posicion completa").
+                        # La doc exige igual `quantity` y `stopPrice`, y prohibe
+                        # combinarlo con `reduceOnly`.
                         "quantity": self._texto_qty(symbol, cantidad),
+                        "closePosition": "true",
                         "workingType": "MARK_PRICE",
                     },
                 )

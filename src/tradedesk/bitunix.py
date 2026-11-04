@@ -308,6 +308,19 @@ class Bitunix:
                 return _numero(fila, "available")
         return 0.0
 
+    def saldo(self, margin_coin="USDT"):
+        """Saldo en vivo: disponible + margen + congelado.
+
+        El `available` de Bitunix ya incluye el PnL no realizado, así que esta
+        suma es el equity de la cuenta y se mueve con las posiciones abiertas.
+        """
+        for fila in _filas(self.assets()):
+            if str(fila.get("marginCoin") or "").upper() == margin_coin:
+                return (
+                    _numero(fila, "available") + _numero(fila, "margin") + _numero(fila, "frozen")
+                )
+        return 0.0
+
     def funding(self, simbolo):
         """Tasa y hora del próximo funding.
 

@@ -312,7 +312,11 @@ class Session:
         return filas
 
     def refresh_saldos(self):
-        """USDT disponible en cada broker conectado (lo que se puede usar)."""
+        """Saldo total de cada broker conectado (libre + margen en uso).
+
+        Antes se mostraba solo lo disponible: con una posicion abierta el
+        numero chico (14,79 de 313,24) parecia un saldo roto.
+        """
         saldos = dict(self.saldos)
         for nombre, cliente in (
             ("mexc", self.cliente("mexc")),
@@ -322,7 +326,8 @@ class Session:
             if cliente is None:
                 continue
             try:
-                saldos[nombre] = float(cliente.available())
+                leer = getattr(cliente, "saldo", None) or cliente.available
+                saldos[nombre] = float(leer())
             except Exception as exc:
                 self.q.put(("error", f"saldo {nombre}: {exc}"))
         self.saldos = saldos

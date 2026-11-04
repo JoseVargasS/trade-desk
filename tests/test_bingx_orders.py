@@ -217,7 +217,10 @@ def test_tpsl_place_manda_dos_condicionales_con_cantidad():
     assert len(stops) == 2
     assert {cuerpo["type"] for cuerpo in stops} == {"TAKE_PROFIT_MARKET", "STOP_MARKET"}
     assert all(cuerpo["quantity"] == "0.0002" for cuerpo in stops)
-    assert all("closePosition" not in cuerpo for cuerpo in stops)
+    # `closePosition` = la app de BingX lo muestra como "Posicion completa";
+    # sin el, queda como "parcial al 100 %" (que es lo que hacia antes)
+    assert all(cuerpo["closePosition"] == "true" for cuerpo in stops)
+    assert all("reduceOnly" not in cuerpo for cuerpo in stops)
 
 
 def test_reverse_reabre_el_mismo_tamano():
@@ -290,3 +293,65 @@ def test_la_posicion_toma_la_fee_del_historial():
     }
     fila = decorate_positions(cliente, [posicion], [], {"9": 0.003824})[0]
     assert round(fila["totalFee"], 6) == 0.003824
+
+
+def test_el_tamano_de_contrato_es_1_porque_la_cantidad_va_en_monedas():
+    """BingX publica `size` 0,0001 en el catalogo, pero `quantity` va en monedas.
+
+    Tomar ese `size` como tamaño de contrato multiplicaba el nocional y el mark
+    price por 10.000: la posición salía en negativo con un mark price absurdo.
+    """
+    cliente = Bingx("k", "s")
+    cliente.contracts = lambda: [
+        {
+            "symbol": "BTC-USDT",
+            "size": "0.0001",
+            "pricePrecision": 1,
+            "tradeMinQuantity": "0.0001",
+        }
+    ]
+    contrato = cliente.contract("BTC_USDT")
+    assert contrato["contractSize"] == 1.0
+    assert contrato["priceScale"] == 1
+
+    cliente.positions = lambda: [
+        {
+            "positionId": "1",
+            "symbol": "BTC-USDT",
+            "positionAmt": "0.0388",
+            "positionSide": "SHORT",
+            "avgPrice": "76920.7",
+            "leverage": 10,
+            "unrealizedProfit": "7.4826",
+        }
+    ]
+    fila = decorate_positions(cliente, cliente.positions(), [])[0]
+    assert fila["_contractSize"] == 1.0
+    assert round(fila["holdVol"], 4) == 0.0388
+    # nocional = monedas × precio (sin factores de 10.000)
+    assert round(fila["holdVol"] * fila["_contractSize"] * fila["holdAvgPrice"], 2) == 2984.52
+
+
+def test_el_apalancamiento_de_una_orden_llega_como_numero():
+    """BingX manda `leverage: "10X"` y la tabla lo pinta con `int()`."""
+    from tradedesk.bingx import decorate_orders
+
+    cliente, _ = armado()
+    ordenes = [
+        {
+            "orderId": "5",
+            "symbol": "BTC-USDT",
+            "side": "BUY",
+            "positionSide": "LONG",
+            "type": "LIMIT",
+            "price": "60000",
+            "quantity": "0.001",
+            "executedQty": "0",
+            "status": "NEW",
+            "leverage": "10X",
+            "time": 1793752692570,
+        }
+    ]
+    fila = decorate_orders(cliente, ordenes)[0]
+    assert fila["leverage"] == 10
+    assert isinstance(fila["leverage"], int)
