@@ -38,7 +38,7 @@ class QtPort:
         return form(self.ventana, titulo, campos, nota=nota, ok=ok)
 
     def status(self, texto):
-        self.ventana.statusBar().showMessage(texto)
+        self.ventana._mostrar_estado(texto)
 
     def tpsl(self, pos, precio):
         return editar_tpsl(self.ventana, pos, int(pos.get("positionType") or 1) == 1, precio)

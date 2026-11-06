@@ -7,7 +7,9 @@ La API real se prueba a mano con `tools/probe_bingx.py`.
 import hashlib
 import hmac
 
-from tradedesk.bingx import Bingx, canonico, decorate_positions, display_name, largo
+import pytest
+
+from tradedesk.bingx import Bingx, BingxError, canonico, decorate_positions, display_name, largo
 
 CONTRATO = {
     "symbol": "BTC-USDT",
@@ -221,6 +223,49 @@ def test_tpsl_place_manda_dos_condicionales_con_cantidad():
     # sin el, queda como "parcial al 100 %" (que es lo que hacia antes)
     assert all(cuerpo["closePosition"] == "true" for cuerpo in stops)
     assert all("reduceOnly" not in cuerpo for cuerpo in stops)
+
+
+def test_tpsl_place_aborta_si_no_puede_limpiar_condicionales_viejas():
+    cliente, enviados = armado()
+    cliente.positions = lambda: [
+        {"positionId": "9", "symbol": "BTC-USDT", "positionAmt": "0.0002", "positionSide": "LONG"}
+    ]
+    cliente.open_orders = lambda: [
+        {
+            "symbol": "BTC-USDT",
+            "type": "STOP_MARKET",
+            "positionSide": "LONG",
+            "orderId": "old-stop",
+        }
+    ]
+
+    def cancelar(_ordenes):
+        raise BingxError("cancel rechazada")
+
+    cliente.cancel = cancelar
+    with pytest.raises(BingxError, match="no se pudo cancelar.*cancel rechazada"):
+        cliente.tpsl_place("9", tp=84000, simbolo="BTC_USDT")
+
+    assert not any(ruta.endswith("/trade/order") for _metodo, ruta, _body in enviados)
+
+
+def test_tpsl_cancel_expone_el_fallo_de_cancelacion():
+    cliente, _enviados = armado()
+    cliente.open_orders = lambda: [
+        {
+            "symbol": "BTC-USDT",
+            "type": "STOP_MARKET",
+            "positionSide": "LONG",
+            "orderId": "old-stop",
+        }
+    ]
+
+    def cancelar(_ordenes):
+        raise BingxError("cancel rechazada")
+
+    cliente.cancel = cancelar
+    with pytest.raises(BingxError, match="cancel rechazada"):
+        cliente.tpsl_cancel(None, simbolo="BTC_USDT")
 
 
 def test_reverse_reabre_el_mismo_tamano():

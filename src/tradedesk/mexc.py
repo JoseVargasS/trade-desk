@@ -365,6 +365,8 @@ class Mexc:
                     "Reintenta en unos segundos."
                 ) from None
             raise MexcError(f"HTTP {resp.status_code}: respuesta no JSON") from None
+        if not isinstance(data, dict):
+            raise MexcError("Respuesta invalida de MEXC.")
         if data.get("success") is not True:
             code = data.get("code")
             msg = ERRORES.get(code) or data.get("message") or f"code={code}"
@@ -402,9 +404,9 @@ class Mexc:
 
     def contract(self, symbol):
         if symbol not in self._contracts:
-            data = self.http.get("/api/v1/contract/detail", params={"symbol": symbol}).json()[
-                "data"
-            ]
+            data = self._unwrap(self.http.get("/api/v1/contract/detail", params={"symbol": symbol}))
+            if not isinstance(data, dict) or not data:
+                raise MexcError(f"MEXC no devolvio el contrato de {symbol}.")
             self._contracts[symbol] = data
         return self._contracts[symbol]
 
@@ -423,7 +425,13 @@ class Mexc:
         pueden diferir del endpoint individual, que es el que manda.
         """
         if self._markets is None or force:
-            data = self.http.get("/api/v1/contract/detail").json()["data"]
+            data = self._unwrap(self.http.get("/api/v1/contract/detail"))
+            if (
+                not isinstance(data, list)
+                or not data
+                or not all(isinstance(contract, dict) for contract in data)
+            ):
+                raise MexcError("MEXC devolvio un catalogo de contratos invalido.")
             self._markets = {
                 c["symbol"]: c for c in data if c.get("state") == 0 and c.get("apiAllowed")
             }

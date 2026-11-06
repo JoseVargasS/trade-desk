@@ -9,6 +9,7 @@ leen los controles. Ningún pedido de red sale del hilo de la UI.
 
 import queue
 import threading
+import time
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer
 from PySide6.QtGui import QPixmap
@@ -55,6 +56,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         self._ordenes = []
         self._tarjetas = {}
         self._ultimo_error = ""
+        self._error_hasta = 0.0
         self._fondos = {}
         self._saldos = {}
         self._ip = {}
@@ -85,7 +87,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         raiz.addWidget(self._armar_pestanas(), 1)
 
         self.setCentralWidget(central)
-        self.statusBar().showMessage("DRY-RUN activo · no abre ni cierra posiciones")
+        self._mostrar_estado("DRY-RUN activo · no abre ni cierra posiciones")
         self.setStyleSheet(qss())
 
         self._latido = QTimer(self)
@@ -106,7 +108,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         creds.save("mexc", *got)
         self.session.mx = Mexc(*got)
         self.session.hay["mexc"] = True
-        self.statusBar().showMessage("Key guardada. Listo para operar.")
+        self._mostrar_estado("Key guardada. Listo para operar.")
         threading.Thread(target=self.session.refresh_positions, daemon=True).start()
 
     def closeEvent(self, evento):
@@ -169,7 +171,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
             return
         creds.save(nombre, *got)
         self.session.poner_cliente(nombre, clase(*got))
-        self.statusBar().showMessage(f"Claves de {nombre} guardadas.")
+        self._mostrar_estado(f"Claves de {nombre} guardadas.")
 
         def refrescar():
             self.session.refresh_saldos()
@@ -224,7 +226,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         QApplication.clipboard().setText(ip)
         v6 = (getattr(self, "_ip", {}) or {}).get("v6")
         extra = f" · IPv6 {v6} en el tooltip" if v6 else ""
-        self.statusBar().showMessage(f"IP {ip} copiada.{extra}")
+        self._mostrar_estado(f"IP {ip} copiada.{extra}")
 
     def _añadir_par(self):
         if not self.session.mercados:
@@ -234,13 +236,13 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         if not symbol:
             return
         self.session.add_card(symbol)
-        self.statusBar().showMessage(f"{symbol} añadido · elige el broker en la tarjeta.")
+        self._mostrar_estado(f"{symbol} añadido · elige el broker en la tarjeta.")
 
     def _cambio_dry(self, activo):
         self._dry = bool(activo)
         self.chk_dry.setText("DRY-RUN" if self._dry else "REAL")
         self.chk_dry.setStyleSheet(f"QCheckBox {{ color: {t.GOLD if self._dry else t.RED}; }}")
-        self.statusBar().showMessage(
+        self._mostrar_estado(
             "DRY-RUN activo · no abre ni cierra posiciones"
             if self._dry
             else "REAL · las órdenes se envían"
@@ -343,7 +345,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
             self.session.mover_tarjeta(tarjeta.tarjeta["id"], self._destino)
             self._arrastrada = None
             self._destino = None
-            self.statusBar().showMessage("Orden de las tarjetas guardado.")
+            self._mostrar_estado("Orden de las tarjetas guardado.")
 
     def _armar_pestanas(self):
         self._tabs = QTabWidget()
@@ -437,9 +439,9 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
             if tipo == "error":
                 # los errores del poller (tipico: 510 Demasiadas peticiones) van a la
                 # barra de estado: un modal por cada reintento tapa la app entera
-                if mensaje[1] != self._ultimo_error:
+                if mensaje[1] != self._ultimo_error or time.monotonic() >= self._error_hasta:
                     self._ultimo_error = mensaje[1]
-                    self.statusBar().showMessage(mensaje[1], 8000)
+                    self._mostrar_estado(mensaje[1], 8000, error=True)
             elif tipo == "cards":
                 self._pintar_deck(mensaje[1])
             elif tipo == "ticker":
@@ -457,7 +459,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
                 self._ordenes = mensaje[1]
                 self._pintar_ordenes(self._ordenes)
             elif tipo in ("status", "closed"):
-                self.statusBar().showMessage(mensaje[1])
+                self._mostrar_estado(mensaje[1])
             elif tipo == "notice":
                 self._notificar(*mensaje[1])
             elif tipo == "order":
@@ -490,6 +492,13 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
                 )
         # un modal dentro de _drenar congela el refresco: se abre al volver al bucle
         QTimer.singleShot(0, self._siguiente_aviso)
+
+    def _mostrar_estado(self, texto, duracion=0, error=False):
+        if error:
+            self._error_hasta = time.monotonic() + duracion / 1000
+        elif time.monotonic() < self._error_hasta:
+            return
+        self.statusBar().showMessage(texto, duracion)
 
     def _notificar(self, titulo, mensaje, aviso=None, danger=False):
         self._avisos.append((titulo, mensaje, aviso, danger))
@@ -532,7 +541,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         tarjeta = self._tarjetas.get(ident)
         if tarjeta is not None:
             tarjeta.set_precio(precio, cambio)
-        self.statusBar().showMessage(f"{len(self._posiciones)} posiciones abiertas")
+        self._mostrar_estado(f"{len(self._posiciones)} posiciones abiertas")
 
     def showEvent(self, evento):
         super().showEvent(evento)
@@ -561,6 +570,8 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
                 )
                 widget.setParent(self._lienzo)
                 widget.show()
+            else:
+                widget.tarjeta["contrato"] = datos["contrato"]
             orden.append(widget)
         for sobrante in viejas.values():
             sobrante.hide()
@@ -577,9 +588,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
     def _cambio_broker(self, tarjeta, nombre):
         ident = tarjeta.tarjeta["id"]
         self.session.set_exchange(ident, nombre)
-        self.statusBar().showMessage(
-            f"{tarjeta.tarjeta['symbol']} ahora opera en {nombre.upper()}."
-        )
+        self._mostrar_estado(f"{tarjeta.tarjeta['symbol']} ahora opera en {nombre.upper()}.")
 
     def _quitar_par(self, ident):
         self.session.remove_card(ident)

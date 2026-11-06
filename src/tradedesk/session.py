@@ -52,6 +52,7 @@ class Session:
             "bingx": bool(self.bingx.key),
         }
         self.q = queue.Queue()
+        self._log_error_reported = False
         self.tarjetas = self._tarjetas()
         self.precios = {}
         self.mercados = {}
@@ -271,8 +272,11 @@ class Session:
             self._rotar_log(ruta)
             with open(str(ruta), "a", encoding="utf-8") as f:
                 f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}\n")
-        except Exception:
-            pass
+            self._log_error_reported = False
+        except Exception as exc:
+            if not self._log_error_reported:
+                self._log_error_reported = True
+                self.q.put(("error", f"No se pudo escribir trades.log: {exc}"))
 
     @staticmethod
     def _rotar_log(ruta, limite=1_000_000, copias=3):
@@ -299,27 +303,48 @@ class Session:
     def posiciones_todas(self):
         """Posiciones de todos los brokers conectados, ya adaptadas a la interfaz."""
         filas = []
-        if self.cliente("mexc"):
-            for pos in decorate_positions(self.mx, self.mx.positions()):
-                pos["_exchange"] = "mexc"
-                filas.append(pos)
-        if self.cliente("bitunix"):
+        cliente = self.cliente("mexc")
+        if cliente:
             try:
-                stops = self.bitunix.tpsl_list()
-            except Exception:
+                posiciones = decorate_positions(cliente, cliente.positions())
+            except Exception as exc:
+                self._error_consulta("posiciones", "mexc", exc)
+            else:
+                for pos in posiciones:
+                    pos["_exchange"] = "mexc"
+                    filas.append(pos)
+        cliente = self.cliente("bitunix")
+        if cliente:
+            try:
+                stops = cliente.tpsl_list()
+            except Exception as exc:
+                self._error_consulta("TP/SL de posiciones", "bitunix", exc)
                 stops = []
-            filas.extend(decorate_positions_bitunix(self.bitunix, self.bitunix.positions(), stops))
-        if self.cliente("bingx"):
             try:
-                condicionales = self.bingx.open_orders()
-            except Exception:
+                filas.extend(decorate_positions_bitunix(cliente, cliente.positions(), stops))
+            except Exception as exc:
+                self._error_consulta("posiciones", "bitunix", exc)
+        cliente = self.cliente("bingx")
+        if cliente:
+            try:
+                condicionales = cliente.open_orders()
+            except Exception as exc:
+                self._error_consulta("TP/SL de posiciones", "bingx", exc)
                 condicionales = []
-            posiciones_bingx = self.bingx.positions()
-            comisiones = self.bingx.comisiones() if posiciones_bingx else {}
-            filas.extend(
-                decorate_positions_bingx(self.bingx, posiciones_bingx, condicionales, comisiones)
-            )
+            try:
+                posiciones = cliente.positions()
+                comisiones = cliente.comisiones() if posiciones else {}
+                filas.extend(
+                    decorate_positions_bingx(cliente, posiciones, condicionales, comisiones)
+                )
+            except Exception as exc:
+                self._error_consulta("posiciones", "bingx", exc)
         return filas
+
+    def _error_consulta(self, recurso, broker, exc):
+        texto = f"{recurso} {broker}: {exc}"
+        self.log(f"ERR {recurso} {broker}: {type(exc).__name__}")
+        self.q.put(("error", texto))
 
     def refresh_orders(self):
         try:
@@ -329,14 +354,22 @@ class Session:
 
     def ordenes_todas(self):
         filas = []
-        if self.cliente("mexc"):
-            for orden in decorate_orders(self.mx, self.mx.open_orders()):
-                orden["_exchange"] = "mexc"
-                filas.append(orden)
-        if self.cliente("bitunix"):
-            filas.extend(decorate_orders_bitunix(self.bitunix, self.bitunix.open_orders()))
-        if self.cliente("bingx"):
-            filas.extend(decorate_orders_bingx(self.bingx, self.bingx.open_orders()))
+        for broker, cliente, decorar in (
+            ("mexc", self.cliente("mexc"), decorate_orders),
+            ("bitunix", self.cliente("bitunix"), decorate_orders_bitunix),
+            ("bingx", self.cliente("bingx"), decorate_orders_bingx),
+        ):
+            if cliente is None:
+                continue
+            try:
+                ordenes = cliente.open_orders()
+                filas_broker = decorar(cliente, ordenes)
+                if broker == "mexc":
+                    for orden in filas_broker:
+                        orden["_exchange"] = broker
+                filas.extend(filas_broker)
+            except Exception as exc:
+                self._error_consulta("ordenes", broker, exc)
         return filas
 
     def refresh_saldos(self):

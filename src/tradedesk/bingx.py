@@ -596,8 +596,10 @@ class Bingx:
         for vieja in self._condicionales(symbol, lado):
             try:
                 self.cancel([vieja])
-            except Exception:
-                pass
+            except Exception as exc:
+                raise BingxError(
+                    f"BingX: no se pudo cancelar una condicional TP/SL anterior: {exc}"
+                ) from exc
         salida = []
         for tipo, precio in (("TAKE_PROFIT_MARKET", tp), ("STOP_MARKET", sl)):
             if not precio:
@@ -627,10 +629,7 @@ class Bingx:
         """Cancela las condicionales vivas de ese par."""
         salida = []
         for orden in self._condicionales(simbolo):
-            try:
-                salida.append(self.cancel([orden]))
-            except Exception:
-                continue
+            salida.append(self.cancel([orden]))
         return salida
 
     def modify_order(self, orden, form):

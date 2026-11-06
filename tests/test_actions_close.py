@@ -255,3 +255,40 @@ def test_be_todas_cancelado_no_manda_nada(app, posicion):
     app.be_todas([dict(posicion, markPrice=4200.0)])
 
     assert app.mx.sent == []
+
+
+def test_cancelar_publica_confirmacion_visible(app):
+    app.cancelar(
+        {
+            "orderId": "123",
+            "symbol": "XAU_USDT",
+            "side": 1,
+            "orderType": 1,
+            "price": 4000,
+            "vol": 2,
+            "_exchange": "mexc",
+        }
+    )
+
+    assert app.q.get_nowait() == ("status", "1 orden(es) cancelada(s) en mexc.")
+    assert app.mx.sent[-1][0].endswith("/order/cancel")
+
+
+def test_fallo_al_cancelar_publica_error_visible(app):
+    def rechazar(_ids):
+        raise RuntimeError("API no disponible")
+
+    app.mx.cancel = rechazar
+    app.cancelar(
+        {
+            "orderId": "123",
+            "symbol": "XAU_USDT",
+            "side": 1,
+            "orderType": 1,
+            "price": 4000,
+            "vol": 2,
+            "_exchange": "mexc",
+        }
+    )
+
+    assert app.q.get_nowait() == ("error", "Error al cancelar en mexc: API no disponible")

@@ -511,9 +511,10 @@ class Control:
             try:
                 cliente.cancel(ids)
                 self.session.log(f"OK  canceladas {nombre} {ids}")
+                self.q.put(("status", f"{len(ids)} orden(es) cancelada(s) en {nombre}."))
             except Exception as exc:
-                self.session.log(f"ERR cancelar {nombre}: {exc}")
-                self.q.put(("closed", f"Error al cancelar en {nombre}: {exc}"))
+                self.session.log(f"ERR cancelar {nombre}: {type(exc).__name__}")
+                self.q.put(("error", f"Error al cancelar en {nombre}: {exc}"))
         self.session.refresh_orders()
 
     def modificar(self, order):

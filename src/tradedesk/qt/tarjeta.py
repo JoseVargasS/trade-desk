@@ -287,12 +287,6 @@ class Tarjeta(QFrame):
         if nombre == actual:
             return
         self.tarjeta["exchange"] = nombre
-        cliente = self.clientes.get(nombre)
-        if cliente is not None:
-            try:
-                self.tarjeta["contrato"] = cliente.contract(self.tarjeta["symbol"]) or {}
-            except Exception:
-                pass
         self._pintar_broker()
         self.on_broker(self, nombre)
         self._actualizar()
