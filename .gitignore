@@ -6,7 +6,7 @@ config.json
 
 # trabajo local: capturas de prueba y notas de migracion (no se versionan)
 _*.png
-docs/MIGRACION_QT.md
+docs/PLAN.md
 
 # herramientas
 .pytest_cache/
@@ -16,3 +16,5 @@ dist/
 *.egg-info/
 .codegraph/
 operaciones.json
+
+.tmp/

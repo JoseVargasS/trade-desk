@@ -22,7 +22,6 @@ POS_COLS = (
     ("tpsl", "TP / SL", 188, "e"),
 )
 
-PENCIL_GUTTER = 24
 PENCIL_COLS = {"margen", "tpsl"}
 
 # Historial agrupado: una fila por operación (apertura + cierres juntos)
@@ -40,7 +39,6 @@ OPER_COLS = (
     ("estado", "Estado", 106, "w"),
 )
 
-SIDES = {1: "LONG", 2: "CLOSE S", 3: "SHORT", 4: "CLOSE L"}
 STATES = {1: "Pendiente", 2: "Sin llenar", 3: "Ejecutada", 4: "Cancelada", 5: "Invalida"}
 
 ROW_H = 56

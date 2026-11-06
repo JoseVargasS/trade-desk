@@ -44,10 +44,8 @@ Semánticos:
 | `GREEN` | `#1ECB81` | LONG, PnL positivo, fee negativa (rebate), conectado |
 | `RED` | `#F6465D` | SHORT, PnL negativo, fee positiva (costo), error |
 | `GOLD` | `#FFD60A` | DRY-RUN, advertencias |
-| `BLUE` | `#2196F3` | reservado (no usado) |
 | `SELECT` | `#243044` | selección de texto en listbox |
 | `ACCENT_SOFT` | `#26405F` | segmento activo, preset activo, botón primario suave |
-| `SELECT_SOFT` | `#1B2534` | reservado para hover de fila |
 | `ROW_ALT` | `#16191F` | fila alterna de tabla |
 | `GREEN_HOVER` / `RED_HOVER` | `#18B374` / `#E03A50` | hover de los botones llenos |
 | `ON_GREEN` / `ON_RED` | `#04140D` / `#150508` | texto oscuro sobre verde / rojo |
@@ -93,24 +91,28 @@ tipografía.
   Cabecera: 36 px. Los altos están en `layout.py` (`ROW_H`, `ORDER_ROW_H`) y se usan tal cual:
   Qt ya trabaja en píxeles, no hay escala DPI que aplicar.
 - Ventana: **1800 × 1000** por defecto, mínimo **1760 × 860**. La fila de posiciones mide
-  1696 px; con menos de 1760 la tabla recorta la última columna en silencio (no hay scroll
-  horizontal).
+  **1622 px** (30 del checkbox + 1392 de columnas + 200 de acciones); con menos de 1760 la
+  tabla recorta la última columna en silencio (no hay scroll horizontal).
 ---
 
 ## 5. Componentes
 
 | Componente | Archivo | Notas |
 |---|---|---|
-| `VistaQt` | `qt/view.py` | arma cabecera, deck, barra de estado y las tres pestañas |
-| `Tarjeta` | `qt/view.py` | par + apalancamiento + margen + tamaño (+ chip `Mercado ▾`) + TP/SL + LONG/SHORT |
-| `BarraCierre` | `qt/view.py` | precio (Mercado / límite), % de la posición y los dos botones de la fila |
+| `VistaQt` | `qt/ventana.py` | arma cabecera, deck, barra de estado y las tres pestañas |
+| pestaña Posiciones | `qt/tabla_posiciones.py` | mixin: filas, resumen bruto/neto y globo de la fee |
+| pestaña Órdenes | `qt/tabla_ordenes.py` | mixin: órdenes abiertas, panel estilo MEXC |
+| pestaña Historial | `qt/tabla_historial.py` | mixin: una fila por operación, con su neto |
+| `Tarjeta` | `qt/tarjeta.py` | par + apalancamiento + margen + tamaño (+ chip `Mercado`) + TP/SL + LONG/SHORT |
+| `BarraCierre` | `qt/cierre.py` | precio (Mercado / límite), % de la posición y los dos botones de la fila |
 | `Tarjeta` / `BarraCierre` (formularios) | `forms.py` | parseo puro de lo escrito; nada de widgets |
-| `EditorOrden` | `qt/dialogs.py` | editor de la orden: lado, apalancamiento, margen, precio y TP/SL |
-| `Modal`, `confirm`, `show`, `form`, `ask_key` | `qt/dialogs.py` | diálogos propios, borderless, sin `QMessageBox` |
-| `QtPort` | `qt/dialogs.py` | `UiPort` que usa `controller.Control` |
-| `_tabla` + `DelegadoCeldas` | `qt/view.py`, `qt/cells.py` | tabla y celdas compuestas con color |
+| `EditorOrden` | `qt/editor_orden.py` | editor de la orden: lado, apalancamiento, margen, precio y TP/SL |
+| `Modal`, `confirm`, `show`, `form`, `ask_key` | `qt/dialogos_base.py` | diálogos propios, borderless, sin `QMessageBox` |
+| `QtPort` | `qt/port.py` | `UiPort` que usa `controller.Control` |
+| `tabla` + `DelegadoCeldas` | `qt/cells.py` | tabla, celdas compuestas con color, spinner y bocadillo |
 | `BuscarPar` | `qt/search.py` | buscador modal, `Enter` toma el primero |
 | `Segmentado`, `boton`, `etiqueta`, `qss` | `qt/style.py` | factories de widgets, para no repetir estilos |
+| `cuando`, `tamano_usdt` | `qt/formato.py` | fecha de las celdas y tamaño en USDT del historial |
 
 **Estructura de la fila de posiciones**
 
@@ -128,10 +130,10 @@ tipografía.
 | `Fee · %mrg / pos` | Total en 13 bold (color por signo) **con subrayado punteado**, `0.30% / 0.03%` en `MUTED` 11 (parte del margen y del nocional) y `ahorro 1.7489` en `GREEN` 11. El total es **comisión + funding** (`mexc.fee_desglose`): `totalFee` = comisión cobrada al abrir y `holdFee` = funding; `lowSaveTotalFee` es "Fees saved" y **no** suma. El subrayado punteado avisa que hay detalle: al pasar el puntero, `tooltip.NumeroConDetalle` abre un panel con `Comisión / Funding / Fee total / Fees saved`. Ojo: el terminal de MEXC pinta su "Fees" como `totalFee + lowSaveTotalFee`, así que allí el número es más alto |
 | `TP / SL` | todo alineado a la derecha: `3,990.5 / 3,880.2`, o `TP 3,990.5`, o `SL 3,880.2`, o `—`; lápiz al final |
 
-La fila mide 56 px y lleva `grid_rowconfigure(0, weight=1)` para que cada celda quede
-centrada verticalmente sin tocar los bordes: los labels llevan `height` explícito (19 / 15 /
-13) porque el alto por defecto de 28 px desborda la fila. El modo de margen (aislado/cruzado)
-no se muestra en la fila: se deduce del lápiz de margen, que aparece deshabilitado en cruzado.
+La fila mide 56 px y cada celda queda centrada verticalmente sin tocar los bordes: las líneas
+se dibujan con el delegado, que centra el bloque de 1 a 3 líneas dentro de la fila (el alto de
+cada línea sale del `QFontMetrics`). El modo de margen (aislado/cruzado) no se muestra en la
+fila: se deduce del lápiz de margen, que aparece deshabilitado en cruzado.
 
 **Reglas de la tabla**
 - `QTableWidget` con `DelegadoCeldas`: las celdas simples pintan varias líneas con colores
@@ -141,18 +143,17 @@ no se muestra en la fila: se deduce del lápiz de margen, que aparece deshabilit
 - **La cabecera hereda la alineación de su columna**: texto a la izquierda (`Par`, `Lado`,
   `Apertura`), números a la derecha. No se centra: centrar deja el título flotando sobre
   un dato pegado al borde y se lee peor.
-- **Columnas con lápiz (`margen`, `tpsl`)**: el lápiz va al final de la celda y la cabecera
-  reserva ese mismo hueco (`PENCIL_GUTTER`), así el valor y el título comparten el borde
-  derecho. Vale para las dos: cabecera y fila suman siempre `ancho + 8`.
-- Anchos: `par 132 · lado 74 · apertura 84 · pos 112 · entrada 94 · mark 94 · liq 100 ·
-  ratio 98 · margen 132 · pnl 122 · fee 140 · tpsl 188`, con +8 px de padding por columna
-  (1600 px de fila con checkbox y acciones). `Lado` está en 74 porque `10X SHORT` ocupa
-  ~72 px; `Par` en 132 para que entre `GOLD(XAU)USDT` (107); `Posición` en 112 por el
+- **Columnas con lápiz (`margen`, `tpsl`)**: el lápiz va al final de la celda, dentro de los
+  6 px de padding. La cabecera **no** reserva ese hueco: el título de esas dos columnas
+  termina ~20 px a la derecha del valor (está en la deuda visual de §8).
+- Anchos: `par 132 · lado 96 · apertura 84 · pos 112 · entrada 94 · mark 94 · liq 100 ·
+  ratio 98 · margen 132 · pnl 122 · fee 140 · tpsl 188` (1392 px de columnas). `Lado` está
+  en 96 porque `100X SHORT` ocupa ~81 px y con 74 se cortaba en `10X SHOR`; `Par` en 132 para que entre `GOLD(XAU)USDT` (107); `Posición` en 112 por el
   sufijo `USDT` (108 en el peor caso); `Apertura` en 84 (74 reales); `TP / SL` en 188
   (110 del par de precios + 24 del lápiz + separador).
 - La selección se restaura por `positionId` en cada refresco del poller.
 - Columna de acciones (200 px): `BarraCierre` en dos líneas dentro de los 190 útiles.
-  Línea 1: `[Mercado ▾]` (106) + `[100% ▾]` (78). Línea 2: `[Cerrar LONG/SHORT]` (102) +
+  Línea 1: `[Mercado]` (106) + `[100%]` (78). Línea 2: `[Cerrar LONG/SHORT]` (102) +
   `[Reverse]` (82). El botón de cerrar toma el color del PnL (verde, rojo o gris) y el texto
   lleva el lado; el marcado del lado en la fila (`Lado`) no cambia.
   Los lápices viven dentro de su celda (Margen y TP/SL).
@@ -259,8 +260,11 @@ cancelar. La tabla se repinta con el poller (cada 3 s).
 
 - La tabla se reconstruye completa en cada refresco (cada 3 s). Con muchas decenas de
   posiciones conviene actualizar por fila o virtualizar.
+- El título de `Margen` y `TP / SL` no queda alineado con el valor: la celda reserva ~26 px
+  al final para el lápiz y la cabecera no.
 - El scroll horizontal de tarjetas no responde a la rueda sin `Shift`.
-- El historial se pinta completo cada 15 s; con más de ~100 filas conviene paginar.
+- El historial se pinta completo cada 15 s y el logo SVG de cada fila se renderiza de nuevo
+  (medido: ~120 ms con 153 operaciones). Plan: repintado incremental en `docs/PLAN.md` §6.3.
 - La fee es una estimación: MEXC devuelve `takerFeeRate` distinto entre llamadas.
 - Los tests automáticos no abren ventanas (Qt + Python 3.14 revienta al cerrar): los
   widgets se revisan con `tools/smoke_live.py` y capturas.

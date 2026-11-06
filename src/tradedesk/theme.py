@@ -22,7 +22,6 @@ MUTED = "#9AA0A8"
 GREEN = "#1ECB81"
 RED = "#F6465D"
 GOLD = "#FFD60A"
-BLUE = "#2196F3"
 
 # botones llenos: hover un paso mas oscuro y texto legible encima
 GREEN_HOVER = "#18B374"
@@ -34,19 +33,14 @@ ON_RED = "#150508"
 DANGER_SOFT = "#3A1A1E"
 DANGER_SOFT_HOVER = "#4A2226"
 
-GREEN_TINT = "#0F1A15"
-RED_TINT = "#1C1214"
-
 SELECT = "#243044"
 ACCENT_SOFT = "#26405F"
-SELECT_SOFT = "#1B2534"
 ROW_ALT = "#16191F"
 
 # ------------------------------------------------------------------ geometria
 R_CARD = 12
 R_CTRL = 8
 R_CHIP = 6
-PAD = 8
 
 # ------------------------------------------------------------------ tipografia
 FONT_DIR = str(ASSETS / "fonts")

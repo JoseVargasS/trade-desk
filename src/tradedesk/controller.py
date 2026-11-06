@@ -65,13 +65,6 @@ class Control:
         """Cliente del broker de esa posición u orden (MEXC si no dice nada)."""
         return self._cliente_de((objeto or {}).get("_exchange") or defecto)
 
-    def _aviso_bitunix(self, que):
-        self.port.show(
-            "Bitunix",
-            f"{que} en Bitunix llega en el próximo paso.\n\n"
-            "Ya funcionan: abrir, cerrar, cerrar todo y cancelar órdenes.",
-        )
-
     def abrir(self, side, form, al_enviar=None, exchange="mexc"):
         """Confirma y envía la orden de la tarjeta (mercado o límite)."""
         price = form.get("price")
@@ -616,20 +609,6 @@ class Control:
                 return True
             time.sleep(0.35)
         return False
-
-    def _cancel_worker(self, ids):
-        try:
-            self.mx.cancel(ids)
-            self.session.log(f"OK  cancel {len(ids)} orden(es) {ids}")
-            if len(ids) == 1:
-                self.q.put(("closed", "Orden cancelada"))
-            else:
-                self.q.put(("closed", f"{len(ids)} órdenes canceladas"))
-        except Exception as e:
-            self.session.log(f"ERR cancel {ids}: {e}")
-            self.q.put(("closed", f"Error al cancelar: {e}"))
-            self.q.put(("notice", ("No se pudo cancelar", str(e), True)))
-        self.session.refresh_orders()
 
     # ------------------------------------------------------------------- margen
     def margen(self, pos):

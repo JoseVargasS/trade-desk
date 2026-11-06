@@ -345,14 +345,6 @@ class Bitunix:
     def open_orders(self):
         return _filas(self._get("/api/v1/futures/trade/get_pending_orders", {}))
 
-    def history_orders(self, limite=50):
-        return _filas(
-            self._get(
-                "/api/v1/futures/trade/get_history_orders",
-                {"pageSize": limite, "pageNum": 1},
-            )
-        )
-
     def tpsl_list(self):
         return _filas(self._get("/api/v1/futures/tpsl/get_pending_orders", {}))
 

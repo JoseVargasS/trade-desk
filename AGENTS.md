@@ -21,11 +21,15 @@ el acceso directo, o la app deja de abrir con doble clic.
 
 ```powershell
 pip install -e ".[dev]"     # deps de la app + pytest/ruff/pre-commit
-python -m pytest            # 66 tests (~15 s): logica pura, payloads y parseo
+python -m pytest            # 141 tests (~14 s): logica pura, payloads y parseo
 python -m ruff check .      # lint
 python -m ruff format .     # formato (obligatorio: CI corre --check)
 scripts\check.bat           # lint + formato + tests de una
 ```
+
+**El plan de trabajo vive en `docs/PLAN.md`.** Ahí están las fases pendientes, el estado de
+cada una y la bitácora con el commit de cada paso. Se actualiza al cerrar cada paso; este
+documento (AGENTS) describe cómo está el código **hoy**, no cómo debería estar.
 
 **Reglas para no romper lo que ya funciona**
 
@@ -39,7 +43,7 @@ scripts\check.bat           # lint + formato + tests de una
   recorta columnas; no ensanches la ventana.
 - **Ruff mandó el formato**: los archivos ocupan ~15 % más líneas que antes (una llamada con
   muchos argumentos queda un argumento por línea). El tope real es **~700 líneas**; si un
-  archivo se cruza, se parte por responsabilidad (`view.py` ya salió de `shell.py`).
+  archivo se cruza, se parte por responsabilidad y el viejo queda de fachada.
 - Colores, fuentes y formatos numéricos **solo** en `theme.py`. La vista Qt usa
   `qt.style.fnt`, que da el tamaño en **píxeles** (no en puntos).
 - La familia es **Geist** y viaja con la app (`assets/fonts`). `qt.style.fnt` la pide con
@@ -112,11 +116,11 @@ Decisiones de fondo que **no** están en discusión:
    Los **lápices** de Monto, Precio y TP/SL abren el editor (lado, apalancamiento, margen,
    precio, TP y SL); en la columna de acciones están `Modificar` y `Cancelar`, y arriba a la
    derecha `Cancelar todo`. Una orden límite no aparece en Posiciones hasta que se llena.
-9. Pestaña **Historial**: las últimas órdenes de los dos brokers, **agrupadas en
+9. Pestaña **Historial**: las últimas órdenes de los **tres** brokers, **agrupadas en
    operaciones** (una fila por posición, no por orden): hora de apertura y de cierre, par
-   con el wordmark del broker, lado, tamaño, entrada, salida, PnL, fee, **neto** (PnL − fee)
-   y estado (`Cerrada` / `Parcial` / `Abierta`). Los cierres parciales se suman en la misma
-   fila en vez de aparecer sueltos.
+   con el wordmark del broker, lado, **tamaño en USDT**, entrada, salida, PnL, fee, **neto**
+   (PnL − fee) y estado (`Cerrada` / `Parcial` / `Abierta`). Los cierres parciales se suman
+   en la misma fila en vez de aparecer sueltos.
 
 `DRY-RUN` viene **siempre encendido** en cada arranque y bloquea **abrir, cerrar y reverse**.
 El **TP/SL**, el **margen** y **cancelar órdenes** sí funcionan con DRY-RUN activo: son
@@ -130,39 +134,61 @@ es abrir.
 ```
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
-  src/tradedesk/
-    __main__.py             arranque: AppUserModelID + vista Qt           18
+  src/tradedesk/            (7.531 lineas en total)
+    __main__.py             arranque: AppUserModelID + vista Qt           20
     paths.py                DATA_DIR (raiz) y ASSETS (paquete)            13
-    session.py              pollers, cola, config y caches sin UI         210
-    controller.py           casos de uso: abrir, cerrar, TP/SL, ordenes   420
-    forms.py                parseo puro de tarjeta y editor de orden       60
-    operaciones.py          empareja ordenes en operaciones (historial)   250
-    archivo.py             operaciones guardadas en disco (upsert)        60
-    brokers.py             nombres y titulos de los brokers (compartido)  12
-    layout.py               anchos/altos de las tablas (sin UI)            60
-    pairs.py                filtro puro del buscador de pares              60
-    theme.py                color, tipografia, radios, formatos           120
-    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   500
-    bitunix.py              firma, endpoints, monedas (qty), specs        290
-    bingx.py                firma, endpoints, monedas (qty), specs        530
-    creds.py                Windows Credential Manager                     29
+    creds.py                Windows Credential Manager                    24
+    brokers.py              nombres y titulos de los brokers               9
+    theme.py                color, tipografia, radios, formatos          118
+    layout.py               anchos/altos de las tablas (sin UI)           64
+    pairs.py                filtro puro del buscador de pares             48
+    forms.py                parseo puro de tarjeta y editor de orden      80
+    pnl.py                  neto de una operacion del historial           12
+    archivo.py              operaciones guardadas en disco (upsert)       63
+    operaciones.py          empareja ordenes en operaciones (historial)  246
+    session.py              pollers, cola, config y caches sin UI        543
+    controller.py           casos de uso: abrir, cerrar, TP/SL, ordenes  655
+    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   654
+    bitunix.py              firma, endpoints, monedas (qty), specs        633
+    bingx.py                firma, endpoints, monedas (qty), specs        670
     assets/                 icon.ico, icon.png, fonts/*.ttf
     qt/
-      __main__.py           abre la ventana                                 26
-      view.py               ventana: cabecera, deck, tablas, drenaje        682
-      tarjeta.py            tarjeta de par y barra de cierre de la fila    279
-      dialogs.py            confirm, aviso, form, API key, TP/SL, editor   568
-      style.py              fnt, etiqueta, boton, Segmentado, qss           160
-      search.py             buscador de pares                               90
-      cells.py              delegado de celdas + icono de lapiz             71
+      __main__.py           abre la ventana                                 38
+      view.py               fachada: reexporta VistaQt (9)
+      ventana.py            cabecera, deck arrastrable, pestanas, drenaje  590
+      tabla_posiciones.py   filas, resumen bruto/neto, globo de la fee     332
+      tabla_ordenes.py      ordenes abiertas (panel estilo MEXC)           122
+      tabla_historial.py    una fila por operacion, con su neto             97
+      tarjeta.py            tarjeta de par                                 383
+      cierre.py             barra de cierre de la fila (slider, botones)   371
+      dialogs.py            fachada: reexporta los dialogos                 43
+      dialogos_base.py      Modal, confirm, show, form y claves            343
+      editor_orden.py       editor de una orden abierta                    167
+      tpsl.py               editor de TP/SL con las lineas vivas            81
+      be.py                 ventana de "Poner a BE"                        125
+      panel_brokers.py      panel de brokers                                60
+      port.py               UiPort de la vista Qt                           50
+      formato.py            fecha y tamano en USDT de las celdas            26
+      style.py              fnt, etiqueta, boton, Segmentado, qss          258
+      cells.py              delegado, celdas con lapiz, spinner, bocadillo 339
+      search.py             buscador de pares                               88
       shell.py              ventana de prueba para medir repintado        152
-  tests/                    pytest: logica pura, payloads y parseo
+  tests/                    pytest (141 tests): logica pura, payloads y parseo
   tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
   scripts/check.bat         lint + formato + tests
+  docs/DESIGN.md            sistema de diseno
+  docs/PLAN.md              plan de trabajo vivo (fases, estado, bitacora)
 ```
 
-Ningún archivo debe pasar de **~700 líneas** (el formato de ruff suma ~15 % al conteo).
-Si se cruza, se divide por responsabilidad: `view.py` ya salió de `shell.py`.
+**Ningún archivo pasa de ~700 líneas.** El más grande del proyecto es `bingx.py` (670) y el
+mayor de la interfaz es `ventana.py` (590). `qt/view.py` y `qt/dialogs.py` quedaron como
+**fachadas** que reexportan: así los imports de `__main__.py`, `tools/smoke_live.py` y de la
+propia vista no cambiaron. Si un archivo se acerca al tope, se parte igual: módulo nuevo +
+fachada, sin tocar los call sites.
+
+Las tres tablas (`tabla_posiciones`, `tabla_ordenes`, `tabla_historial`) son **mixins** de
+`VistaQt`: usan el estado de la ventana y se pintan igual que antes. Al tocar una tabla,
+recordá que el método vive en el mixin, no en `ventana.py`.
 
 ### Flujo de datos
 
@@ -186,15 +212,20 @@ los controles; los casos de uso y los payloads viven en el controlador.
 ### Persistencia
 
 `config.json` (ignorado por git) guarda **solo** `symbol`, `leverage`, `margin`, `size_mode`
-por tarjeta. **No** guarda tamaño, TP, SL ni DRY-RUN (ver §7).
+y `exchange` por tarjeta. **No** guarda tamaño, TP, SL ni DRY-RUN (ver §7). Ojo: hoy se escribe
+con `write_text`, **sin** atomicidad (un corte a mitad lo deja truncado y la app arranca sin
+tarjetas, en silencio): está en `docs/PLAN.md` §3.1.
 
 `operaciones.json` (también ignorado) es el **archivo de operaciones**: cada operación
 cerrada se guarda con una clave estable (`_clave`) y se actualiza en sitio (un parcial que
 después se cierra, o una fee que se ajusta). Existe porque los exchanges purgan su
 historial (~3 meses): sin esto, lo viejo desaparece de la pestaña. Se escribe de forma
 atómica (tmp + `os.replace`) y al arrancar se pinta lo guardado antes de tocar la red.
+**No** hay respaldo todavía, y un JSON corrupto se ignora en silencio y se sobrescribe con lo
+nuevo (`docs/PLAN.md` §3.2 y §3.3).
 
 `trades.log` registra cada intento: hora, resultado, `orderId`, símbolo, `vol`. Nunca la key.
+No rota (§3.4 del plan).
 
 ---
 
@@ -268,8 +299,11 @@ como `takeProfitPrice`. `mexc.plan_tp_sl()` aplica la regla antes de enviar.
 El `stoporder/cancel` es **asíncrono**: recolocar de inmediato da **5004**
 ("greater than the closable amount"), por eso se espera a que la lista quede vacía.
 
-**Idempotencia.** Cada orden lleva `externalOid` único. Si la red falla y se reintenta, MEXC
-rechaza el duplicado en vez de abrir dos posiciones.
+**Idempotencia (lo que hay y lo que no).** Cada apertura (y el cierre de MEXC) lleva un
+`externalOid` único, pero **no existe ningún reintento automático**: ni `httpx` reintenta
+POSTs ni hay bucle en `_post`. Si el usuario reenvía a mano, se genera otro `externalOid` y el
+broker no puede deduplicar. Por eso, ante un timeout, hay que **mirar Posiciones antes de
+reenviar** (`docs/PLAN.md` §5.1).
 
 **Fee estimada.** `takerFeeRate` viene del endpoint individual. Ojo: MEXC devuelve valores
 distintos entre llamadas (se observó `0.0002` y `0.0004` en la misma sesión). Es una
@@ -566,7 +600,7 @@ cantidad exactos de lo que abrió el script.
   que solo tiene Bitunix (se guardan con el símbolo de MEXC y cada módulo lo convierte).
 - La cabecera muestra el **USDT disponible de cada broker** con su **wordmark** (`logo(nombre,
   13, completo=True)`), el número y el `USDT` en 13 px **negrita**, separados por
-  un `·`; cada 15 s. La lista sale de `BROKERS` y `TITULOS` en `view.py`, así sumar un broker
+  un `·`; cada 15 s. La lista sale de `BROKERS` y `TITULOS` en `qt/ventana.py`, así sumar un broker
   es una línea. **El número es el saldo en vivo de la cuenta, con el PnL no realizado
   dentro** (el usuario lo quiere ver moverse con las posiciones): MEXC `equity`, Bitunix
   `available + margin + frozen`, BingX `equity`. `available()` sigue devolviendo lo libre y
@@ -591,8 +625,8 @@ cantidad exactos de lo que abrió el script.
   para saber si una fila abre o cierra. Un cierre que no encuentra apertura (posición
   anterior a la ventana de 50 órdenes) sale como fila `Cerrada` con entrada `—`.
   Columnas en `OPER_COLS` (`layout.py`): apertura, cierre, par (con el wordmark del broker
-  vía `CeldaPar` compacta), lado, **tamaño en USDT** (`cantidad × entrada`, `_tamano_usdt`),
-  entrada, salida, PnL, fee, neto y estado.
+  vía `CeldaPar` compacta), lado, **tamaño en USDT** (`cantidad × entrada`, `qt/formato.py`),
+  entrada, salida, PnL, fee, neto (`pnl.neto_operacion`) y estado.
   `Session.cargar_historial` mezcla los dos brokers y publica ya agrupado.
 - Las operaciones se **guardan en `operaciones.json`** (`archivo.Archivo`): `cargar_historial`
   fusiona lo que trae el broker con lo archivado y publica el resultado, así que lo que ya
@@ -717,7 +751,7 @@ los avisos se encolan fuera del drain (§6).
 python app.py                 # lanzador del acceso directo, con consola para ver errores
 python -m tradedesk           # lo mismo, con PYTHONPATH=src
 python -m tradedesk.qt        # abre la vista Qt directamente
-python -m pytest              # 66 tests: logica pura, payloads y parseo
+python -m pytest              # 141 tests: logica pura, payloads y parseo
 python -m ruff check .        # lint
 python -m ruff format --check .   # formato (lo que corre el CI)
 scripts\check.bat             # las tres cosas juntas
@@ -739,7 +773,8 @@ python tools/qt_probe.py      # ms de repintado (objetivo <= 60)
 | `session.py` (pollers, config, catálogo) | `python -m pytest tests/test_paths.py` + `python tools/smoke_live.py 9` |
 | `forms.py` (parseo de tarjeta/editor) | `python -m pytest tests/test_forms.py` |
 | `pairs.py`, `qt/search.py` (buscador) | `python -m pytest tests/test_search.py` |
-| `qt/view.py`, `qt/dialogs.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
+| `pnl.py` (neto del historial) | `python -m pytest tests/test_pnl.py` |
+| `qt/ventana.py`, `qt/tabla_*.py`, `qt/cierre.py`, `qt/dialogos_base.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
 | `__main__.py`, `app.py` (arranque) | `python -m pytest tests/test_launcher.py` |
 | docs, comentarios, README | nada |
 
@@ -774,7 +809,7 @@ reenviar, todo probado contra la cuenta con órdenes de prueba a mitad de precio
   `closebar.py`, `table.py`, `orders.py`, `search.py`, `dialog.py`, `tooltip.py`, `actions.py`)
   se borraron; `customtkinter` salió de las dependencias.
 - `session.py` carga config/catálogo, pollers y caches. `controller.py` tiene los casos de uso
-  (abrir, cerrar, cerrar todo, reverse, TP/SL, margen, modificar/cancelar) y `qt/dialogs.py`
+  (abrir, cerrar, cerrar todo, reverse, TP/SL, margen, modificar/cancelar) y `qt/port.py`
   implementa el `UiPort`. Los payloads y mensajes son los mismos de antes.
 - La vista Qt ya opera: LONG/SHORT, barra de cierre con `Mercado ▾` / `% ▾`, checkboxes +
   `Cerrar seleccionadas`, `CERRAR TODO`, `Reverse`, lápices de TP/SL y margen, editor de

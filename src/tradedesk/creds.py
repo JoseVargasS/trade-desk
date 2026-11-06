@@ -22,8 +22,3 @@ def load(exchange):
 def save(exchange, key, secret):
     keyring.set_password(SERVICE, f"{exchange}.key", key)
     keyring.set_password(SERVICE, f"{exchange}.secret", secret)
-
-
-def has(exchange):
-    key, secret = load(exchange)
-    return bool(key and secret)
