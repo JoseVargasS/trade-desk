@@ -141,7 +141,7 @@ es abrir.
 ```
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
-  src/tradedesk/            (6.983 líneas Python; conteo de referencia al 2026-11-06)
+  src/tradedesk/            (7.482 líneas Python; conteo de referencia al 2026-11-06)
     __init__.py              inicialización del paquete                      2
     __main__.py              arranque: AppUserModelID + vista Qt            14
     paths.py                 DATA_DIR (raíz) y ASSETS (paquete)             10
@@ -152,13 +152,13 @@ raiz/
     pairs.py                 filtro puro del buscador de pares               36
     forms.py                 parseo puro de tarjeta y editor de orden       100
     pnl.py                   neto de una operación del historial              9
-    archivo.py               operaciones guardadas en disco (upsert)        134
+    archivo.py               operaciones guardadas en disco (upsert)        179
     operaciones.py           empareja órdenes en operaciones (historial)    213
-    session.py               pollers, cola, config y caches sin UI          577
+    session.py               pollers, cola, config y caches sin UI          627
     controller.py            casos de uso: abrir, cerrar, TP/SL, órdenes  1.054
-    mexc.py                  firma, endpoints, USDT->contratos, fee, liq    568
-    bitunix.py               firma, endpoints, monedas (qty), specs        564
-    bingx.py                 firma, endpoints, monedas (qty), specs        610
+    mexc.py                  firma, endpoints, USDT->contratos, fee, liq    572
+    bitunix.py               firma, endpoints, monedas (qty), specs        567
+    bingx.py                 firma, endpoints, monedas (qty), specs        607
     assets/                 icon.ico, icon.png, fonts/*.ttf
     qt/
       __init__.py           inicialización del paquete                       0
@@ -182,17 +182,17 @@ raiz/
       cells.py              delegado, celdas con lápiz, spinner, bocadillo 295
       search.py             buscador de pares                               72
       shell.py              ventana de prueba para medir repintado        134
-  tests/                    pytest (181 tests recopilados): lógica, payloads y UI fake
+  tests/                    pytest (213 tests recopilados): lógica, payloads y UI fake
   tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
   scripts/check.bat         lint + formato + tests
   docs/DESIGN.md            sistema de diseno
   docs/PLAN.md              plan de trabajo vivo (fases, estado, bitacora)
 ```
 
-**El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.** En esta rama,
-`controller.py` (1.041) supera el objetivo; queda pendiente separar responsabilidades en un
-cambio dedicado para no mezclar ese refactor con el endurecimiento. El siguiente módulo más
-grande es `bingx.py` (610); el mayor de la interfaz es `ventana.py` (540).
+**El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.** En `main`,
+`controller.py` (1.054) supera el objetivo; queda pendiente separar responsabilidades en un
+cambio dedicado para no mezclar ese refactor con el resto. El siguiente módulo más
+grande es `bingx.py` (607); el mayor de la interfaz es `ventana.py` (540).
 `qt/view.py` y `qt/dialogs.py` quedaron como
 **fachadas** que reexportan: así los imports de `__main__.py`, `tools/smoke_live.py` y de la
 propia vista no cambiaron. Si un archivo se acerca al tope, se parte igual: módulo nuevo +
@@ -212,18 +212,19 @@ de red y los resultados de acciones publican mensajes; la UI los procesa en `_dr
 _cargar_tarjetas ─► contratos/precios iniciales y saldos
 _cargar_catalogo ─► ("markets", ...)              catálogo MEXC + pares extra Bitunix
 _cargar_ip       ─► ("ip", ...)                   IP inicial
-_poll            ─► ("ticker", ...)               1 tarjeta por vuelta; 0,70 s entre requests
+_poll(broker)    ─► ("ticker", ...)               un hilo por broker, 0,70 s entre requests
 _poll_cuenta     ─► ("positions", ...), ("orders", ...) cada 3 s en estado normal
 _poll_secundario ─► historial (15 s, solo en su pestaña), saldos (15 s),
                     funding (60 s) e IP (900 s); tareas secuenciales en este worker
 ```
 
-El ticker, la cuenta y las tareas secundarias usan workers distintos: una petición lenta en
-uno no detiene los otros. Dentro de `_poll_cuenta`, posiciones y órdenes se consultan en
-secuencia; dentro de `_poll_secundario`, historial, saldos, funding e IP también. Ticker y
-cuenta aplican backoff si fallan (tope de 5 s). No describas al worker secundario como cuatro
-hilos separados. `Session.start()` conserva las referencias a los workers daemon; `stop()`
-señala el evento de cierre.
+Cada broker tiene su propio hilo de precios (`_poll("mexc")`, `_poll("bitunix")`,
+`_poll("bingx")`), así que una consulta colgada o un backoff afectan solo a ese broker
+y no congelan los precios de los demás. Dentro de `_poll_cuenta`, posiciones y órdenes se
+consultan en secuencia; dentro de `_poll_secundario`, historial, saldos, funding e IP también.
+Ticker y cuenta aplican backoff si fallan (tope de 5 s). No describas al worker secundario
+como cuatro hilos separados. `Session.start()` conserva las referencias a los workers daemon;
+`stop()` señala el evento de cierre.
 
 `controller.Control` recibe `session` y un `UiPort` (`qt.dialogs.QtPort`) con
 `confirm`, `show`, `form`, `tpsl`, `editar_orden` y `status`. La UI solo pinta y lee
@@ -310,8 +311,9 @@ no con `fmt_price`, que recorta a 1 decimal desde 1000.
 | change_leverage | 10 / 10 s |
 | posiciones / órdenes | 20 / 2 s |
 
-El poller va a **~1.4 req/s** (delay base 0.70 s) con backoff multiplicativo
-(0.70 s → 5.0 s) si algo falla. Subirlo produce `510 Demasiadas peticiones`.
+Cada hilo de precios va a **~1.4 req/s** de su broker (0.70 s entre requests) con backoff
+multiplicativo (0.70 s → 5.0 s) si algo falla. El ritmo se mantiene por broker, así que
+bajar esos tiempos produce `510 Demasiadas peticiones`.
 
 **TP/SL: la dirección se mide contra el precio actual, no contra la entrada.**
 LONG → TP por encima y SL por debajo; SHORT al revés. Un `stopLossPrice` del lado

@@ -1,8 +1,9 @@
 """Estado y polling sin UI para MEXC, Bitunix y BingX.
 
 Los workers consultan datos y publican resultados por `self.q`; no envían órdenes,
-abren diálogos ni tocan widgets. El ticker, la cuenta y las tareas secundarias usan
-ciclos independientes para que una consulta lenta no detenga las otras actualizaciones.
+abren diálogos ni tocan widgets. El ticker tiene un hilo por broker, y la cuenta y
+las tareas secundarias corren en ciclos propios: una consulta lenta de un broker no
+detiene las actualizaciones de los demás.
 """
 
 import json
@@ -25,7 +26,8 @@ from .bitunix import decorate_positions as decorate_positions_bitunix
 from .mexc import Mexc, decorate_orders, decorate_positions, display_name
 from .operaciones import operaciones
 
-TICKER_SEG = 0.70  # una peticion cada 0.7 s en total (~1.4 req/s, el limite medido)
+TICKER_SEG = 0.70  # 0,7 s entre requests de un broker (MEXC: 10/2 s, va holgado)
+BROKERS = ("mexc", "bitunix", "bingx")
 POSICIONES_SEG = 3.0
 HISTORIAL_SEG = 15.0
 SALDOS_SEG = 15.0
@@ -51,6 +53,7 @@ class Session:
         self._log_error_reported = False
         self.bitunix.on_error = lambda recurso, exc: self._error_consulta(recurso, "bitunix", exc)
         self.tarjetas = self._tarjetas()
+        self._candado_tarjetas = threading.Lock()  # los hilos leen la lista mientras la UI la mueve
         self.precios = {}
         self.mercados = {}
         self.ultimas_posiciones = []
@@ -91,6 +94,16 @@ class Session:
         """Los tres clientes, con o sin claves (la tarjeta decide si sirve)."""
         return {"mexc": self.mx, "bitunix": self.bitunix, "bingx": self.bingx}
 
+    def _tarjetas_de(self, exchange):
+        """Copia de las tarjetas de un broker.
+
+        Los pollers corren en sus propios hilos y la UI agrega, quita y reordena
+        tarjetas mientras tanto: sin candado, la lista podia quedar vacia justo
+        al calcular el indice de la siguiente vuelta.
+        """
+        with self._candado_tarjetas:
+            return [t for t in self.tarjetas if (t.get("exchange") or "") == exchange]
+
     def poner_cliente(self, exchange, cliente):
         """Reemplaza el cliente cuando se cargan claves nuevas desde la UI."""
         setattr(self, "mx" if exchange == "mexc" else exchange, cliente)
@@ -102,46 +115,50 @@ class Session:
         No republica las tarjetas: eso reconstruiría los widgets y borraría lo
         que el usuario escribió (tamaño, TP/SL). El precio lo trae el poller.
         """
-        for tarjeta in self.tarjetas:
-            if tarjeta["id"] == tarjeta_id:
-                tarjeta["exchange"] = exchange
+        with self._candado_tarjetas:
+            for tarjeta in self.tarjetas:
+                if tarjeta["id"] == tarjeta_id:
+                    tarjeta["exchange"] = exchange
         self._guardar_config()
 
     def add_card(self, symbol):
         # se permite el mismo par en los dos brokers: cada tarjeta lleva un id
         ident = symbol
         numero = 2
-        while any(t["id"] == ident for t in self.tarjetas):
-            ident = f"{symbol}#{numero}"
-            numero += 1
-        self.tarjetas.append(
-            {
-                "id": ident,
-                "symbol": symbol,
-                "exchange": "",
-                "leverage": "10",
-                "margin": "Aislado",
-                "size_mode": "Margen",
-            }
-        )
+        with self._candado_tarjetas:
+            while any(t["id"] == ident for t in self.tarjetas):
+                ident = f"{symbol}#{numero}"
+                numero += 1
+            self.tarjetas.append(
+                {
+                    "id": ident,
+                    "symbol": symbol,
+                    "exchange": "",
+                    "leverage": "10",
+                    "margin": "Aislado",
+                    "size_mode": "Margen",
+                }
+            )
         self._guardar_config()
         threading.Thread(target=self._publicar, daemon=True).start()
         return True
 
     def remove_card(self, tarjeta_id):
-        self.tarjetas = [t for t in self.tarjetas if t["id"] != tarjeta_id]
+        with self._candado_tarjetas:
+            self.tarjetas = [t for t in self.tarjetas if t["id"] != tarjeta_id]
         self.precios.pop(tarjeta_id, None)
         self._guardar_config()
         threading.Thread(target=self._publicar, daemon=True).start()
 
     def mover_tarjeta(self, tarjeta_id, indice):
         """Reordena las tarjetas (arrastrar y soltar) y lo guarda."""
-        actual = next((i for i, t in enumerate(self.tarjetas) if t["id"] == tarjeta_id), None)
-        if actual is None:
-            return
-        tarjeta = self.tarjetas.pop(actual)
-        indice = max(0, min(int(indice), len(self.tarjetas)))
-        self.tarjetas.insert(indice, tarjeta)
+        with self._candado_tarjetas:
+            actual = next((i for i, t in enumerate(self.tarjetas) if t["id"] == tarjeta_id), None)
+            if actual is None:
+                return
+            tarjeta = self.tarjetas.pop(actual)
+            indice = max(0, min(int(indice), len(self.tarjetas)))
+            self.tarjetas.insert(indice, tarjeta)
         self._guardar_config()
 
     def _guardar_config(self):
@@ -149,7 +166,9 @@ class Session:
         temporal = ruta.with_name(ruta.name + ".tmp")
         try:
             ruta.parent.mkdir(parents=True, exist_ok=True)
-            temporal.write_text(json.dumps({"cards": self.tarjetas}, indent=2), encoding="utf-8")
+            with self._candado_tarjetas:
+                tarjetas = list(self.tarjetas)
+            temporal.write_text(json.dumps({"cards": tarjetas}, indent=2), encoding="utf-8")
             os.replace(temporal, ruta)
         except Exception as exc:
             self.log(f"ERR config: {exc}")
@@ -461,15 +480,16 @@ class Session:
 
     # ------------------------------------------------------------------- ciclo
     def start(self):
-        for objetivo in (
-            self._cargar_tarjetas,
-            self._cargar_catalogo,
-            self._cargar_ip,
-            self._poll,
-            self._poll_cuenta,
-            self._poll_secundario,
-        ):
-            hilo = threading.Thread(target=objetivo, daemon=True)
+        objetivos = [
+            (self._cargar_tarjetas, ()),
+            (self._cargar_catalogo, ()),
+            (self._cargar_ip, ()),
+        ]
+        # un hilo de precios por broker: el que se cuelga solo se congela a si mismo
+        objetivos += [(self._poll, (broker,)) for broker in BROKERS]
+        objetivos += [(self._poll_cuenta, ()), (self._poll_secundario, ())]
+        for objetivo, args in objetivos:
+            hilo = threading.Thread(target=objetivo, args=args, daemon=True)
             hilo.start()
             self._hilos.append(hilo)
         return self
@@ -564,21 +584,25 @@ class Session:
         except Exception as exc:
             self.q.put(("error", f"catalogo bingx: {exc}"))
 
-    def _poll(self):
-        indice = 0
+    def _poll(self, exchange):
+        """Precios de un broker, en su propio hilo y con su propio ritmo.
+
+        Antes un unico hilo recorria todas las tarjetas: una consulta colgada
+        (MEXC 8 s, Bitunix/BingX 15 s) congelaba los precios de todos los
+        brokers, y el backoff del que fallaba frenaba tambien a los demas.
+        """
         espera = TICKER_SEG
         while not self._parar.is_set():
             fallo = False
-            if self.tarjetas:
-                tarjeta = self.tarjetas[indice % len(self.tarjetas)]
-                indice += 1
-                symbol = tarjeta["symbol"]
-                ident = tarjeta["id"]
-                exchange = tarjeta.get("exchange") or ""
+            tarjetas = self._tarjetas_de(exchange)
+            if tarjetas:
+                # round-robin entre las tarjetas de este broker
+                tarjeta = tarjetas.pop(0)
+                tarjetas.append(tarjeta)
                 cliente = self.cliente(exchange)
                 if cliente is not None:
                     try:
-                        datos = cliente.ticker(symbol) or {}
+                        datos = cliente.ticker(tarjeta["symbol"]) or {}
                         precio = float(datos.get("lastPrice") or 0)
                         if exchange in ("bitunix", "bingx"):
                             apertura = float(datos.get("open") or 0)
@@ -586,11 +610,11 @@ class Session:
                         else:
                             cambio = float(datos.get("riseFallRate") or 0) * 100
                         if precio:
-                            self.precios[ident] = precio
-                            self.q.put(("ticker", ident, precio, cambio))
+                            self.precios[tarjeta["id"]] = precio
+                            self.q.put(("ticker", tarjeta["id"], precio, cambio))
                     except Exception as exc:
                         fallo = True
-                        self.q.put(("error", f"precio {symbol}: {exc}"))
+                        self.q.put(("error", f"precio {tarjeta['symbol']}: {exc}"))
             espera = min(5.0, espera * 2) if fallo else TICKER_SEG
             self._parar.wait(espera)
 
