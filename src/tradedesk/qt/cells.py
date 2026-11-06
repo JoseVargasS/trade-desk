@@ -6,12 +6,23 @@ La celda marcada con `SUBRAYADO` lleva linea punteada bajo el importe y muestra
 su `ToolTipRole` al pasar el puntero (el detalle de la fee).
 """
 
-from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QToolTip, QWidget
+from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QHBoxLayout,
+    QLabel,
+    QStyle,
+    QStyledItemDelegate,
+    QTableWidget,
+    QToolButton,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .. import theme as t
-from .style import fnt
+from .style import etiqueta, fnt, logo
 
 SUBRAYADO = Qt.UserRole + 1
 DETALLE = Qt.UserRole + 2  # filas (nombre, valor, color) del globo de la fee
@@ -214,3 +225,115 @@ class Bocadillo(QWidget):
             pintor.drawText(QRect(0, y, caja.width() - 10, 16), Qt.AlignRight, valor)
             y += 18
         pintor.end()
+
+
+def tabla(columnas, alto_fila):
+    """Tabla con el delegado, los anchos y la alineación de cada columna."""
+    rejilla = QTableWidget(0, len(columnas))
+    rejilla.setHorizontalHeaderLabels([columna[1] for columna in columnas])
+    rejilla.verticalHeader().setVisible(False)
+    rejilla.verticalHeader().setDefaultSectionSize(alto_fila)
+    rejilla.setShowGrid(False)
+    rejilla.setAlternatingRowColors(False)
+    rejilla.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    rejilla.setSelectionMode(QAbstractItemView.NoSelection)
+    rejilla.setFocusPolicy(Qt.NoFocus)
+    rejilla.setWordWrap(False)
+    rejilla.setItemDelegate(DelegadoCeldas(rejilla))
+    for indice, columna in enumerate(columnas):
+        rejilla.setColumnWidth(indice, columna[2])
+        encabezado = rejilla.horizontalHeaderItem(indice)
+        if encabezado is not None:
+            alineacion = Qt.AlignRight if columna[3] == "e" else Qt.AlignLeft
+            encabezado.setTextAlignment(alineacion | Qt.AlignVCenter)
+    return rejilla
+
+
+class CeldaLapiz(QWidget):
+    """Valor(es) + lapiz, actualizable en sitio (no se recrea en cada refresco)."""
+
+    def __init__(self, partes, accion, fondo, vertical=False):
+        super().__init__()
+        self._accion = accion
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {fondo};")
+        fila = QHBoxLayout(self)
+        fila.setContentsMargins(6, 0, 6, 0)
+        fila.setSpacing(4)
+        fila.addStretch(1)
+        caja = QWidget()
+        self._caja = (QVBoxLayout if vertical else QHBoxLayout)(caja)
+        self._caja.setContentsMargins(0, 0, 0, 0)
+        self._caja.setSpacing(0)
+        self._etiquetas = []
+        fila.addWidget(caja)
+        lapiz = QToolButton()
+        lapiz.setIcon(QIcon(icono_lapiz(t.MUTED)))
+        lapiz.setIconSize(QSize(16, 16))
+        lapiz.setCursor(Qt.PointingHandCursor)
+        lapiz.setStyleSheet("QToolButton { border: 0; background: transparent; }")
+        lapiz.clicked.connect(lambda: self._accion())
+        fila.addWidget(lapiz)
+        self.set_partes(partes)
+
+    def set_partes(self, partes):
+        """Crea las etiquetas que falten: la celda puede pasar de 1 valor a 3."""
+        while len(self._etiquetas) < len(partes):
+            _texto, size, _negrita, _color = partes[len(self._etiquetas)]
+            lbl = etiqueta("", size)
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self._caja.addWidget(lbl)
+            self._etiquetas.append(lbl)
+        for indice, lbl in enumerate(self._etiquetas):
+            if indice < len(partes):
+                texto, size, negrita, color = partes[indice]
+                lbl.setText(str(texto))
+                lbl.setFont(fnt(size, negrita))
+                lbl.setStyleSheet(f"color: {color}; background: transparent;")
+                lbl.show()
+            else:
+                lbl.hide()
+
+    def set_fondo(self, color):
+        """Color de la fila: cambia cuando la posicion se mueve de lugar."""
+        if self.styleSheet() != f"background: {color};":
+            self.setStyleSheet(f"background: {color};")
+
+    def set_accion(self, accion):
+        """Se reasigna en cada refresco: la celda no puede quedarse con el dato viejo."""
+        self._accion = accion
+
+
+class CeldaPar(QWidget):
+    """Par y broker: el nombre arriba y el wordmark del broker debajo."""
+
+    def __init__(self, nombre, exchange, fondo, compacta=False):
+        super().__init__()
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet(f"background: {fondo};")
+        self._compacta = bool(compacta)
+        alto = 2 if compacta else 8
+        columna = QVBoxLayout(self)
+        columna.setContentsMargins(6, alto, 6, 2 if compacta else 6)
+        columna.setSpacing(0 if compacta else 1)
+        self.lbl_nombre = etiqueta(nombre, 12 if compacta else 13, True)
+        columna.addWidget(self.lbl_nombre)
+        self.lbl_marca = QLabel()
+        self.lbl_marca.setStyleSheet("background: transparent;")
+        columna.addWidget(self.lbl_marca)
+        columna.addStretch(1)
+        self.set_datos(nombre, exchange)
+
+    def set_fondo(self, color):
+        if self.styleSheet() != f"background: {color};":
+            self.setStyleSheet(f"background: {color};")
+
+    def set_datos(self, nombre, exchange):
+        self.lbl_nombre.setText(str(nombre))
+        alto = 10 if self._compacta else 12
+        imagen = logo(exchange, alto, completo=True) if exchange else QPixmap()
+        if imagen.isNull():
+            self.lbl_marca.hide()
+            return
+        self.lbl_marca.setPixmap(imagen)
+        self.lbl_marca.show()
