@@ -12,7 +12,10 @@ Los mensajes que publica en `session.q` son los mismos que ya pinta la app Tk:
 import threading
 import time
 
+import httpx
+
 from . import theme as t
+from .bingx import es_condicional
 from .forms import volumen_cerrar
 from .mexc import (
     MexcError,
@@ -21,6 +24,10 @@ from .mexc import (
     mark_price,
     plan_tp_sl,
 )
+
+
+class BrokerNoDisponibleError(RuntimeError):
+    pass
 
 
 class Control:
@@ -45,13 +52,18 @@ class Control:
 
     # ------------------------------------------------------------------- abrir
     def _cliente_de(self, nombre):
-        """Cliente de ese broker; si la sesión no sabe de brokers, MEXC."""
+        """Cliente disponible del broker; no sustituye un broker por MEXC."""
+        if nombre not in ("mexc", "bitunix", "bingx"):
+            raise BrokerNoDisponibleError(f"Broker desconocido: {nombre}.")
         traer = getattr(self.session, "cliente", None)
-        if callable(traer):
-            encontrado = traer(nombre)
-            if encontrado is not None:
-                return encontrado
-        return self.mx
+        if not callable(traer):
+            if nombre == "mexc":
+                return self.mx
+            raise BrokerNoDisponibleError(f"No hay cliente disponible para {nombre}.")
+        encontrado = traer(nombre)
+        if encontrado is None:
+            raise BrokerNoDisponibleError(f"No hay credenciales disponibles para {nombre}.")
+        return encontrado
 
     def _brokers(self):
         """(nombre, cliente) de los brokers conectados."""
@@ -95,14 +107,19 @@ class Control:
 
     def _do_abrir(self, side, form, dry, exchange="mexc"):
         symbol = form["symbol"]
-        mx = self._cliente_de(exchange)
         try:
+            mx = self._cliente_de(exchange)
             precio = form.get("price")
             if dry:
                 px = precio or mx.price(symbol)
-                vol = mx.size_to_vol(symbol, form["notional"], px)
+                if exchange == "mexc":
+                    vol = mx.size_to_vol(symbol, form["notional"], px)
+                    unidad = "contratos"
+                else:
+                    vol = mx.size_to_qty(symbol, form["notional"], px)
+                    unidad = symbol.split("_")[0]
                 mensaje = (
-                    f"DRY-RUN {side} {t.fmt_qty(vol)} contratos @ {t.fmt_price(px)} (no enviado)"
+                    f"DRY-RUN {side} {t.fmt_qty(vol)} {unidad} @ {t.fmt_price(px)} (no enviado)"
                 )
                 self.session.log("OK  " + mensaje)
                 self.q.put(("order", (True, mensaje)))
@@ -129,8 +146,9 @@ class Control:
                 precio,
             )
             order_id = (data or {}).get("orderId", "?")
+            unidad = "contratos" if exchange == "mexc" else symbol.split("_")[0]
             mensaje = (
-                f"{side} enviado: {t.fmt_qty(vol)} contratos @ {t.fmt_price(px)} · id {order_id}"
+                f"{side} enviado: {t.fmt_qty(vol)} {unidad} @ {t.fmt_price(px)} · id {order_id}"
             )
             self.session.log("OK  " + mensaje)
             self.q.put(("order", (True, mensaje)))
@@ -140,10 +158,28 @@ class Control:
             self.session.refresh_positions()
             self.session.refresh_orders()
         except Exception as exc:
-            self.session.log(f"ERR {side} {symbol}: {exc}")
-            self.q.put(("order", (False, str(exc))))
-            self.q.put(("closed", str(exc)))
-            self.q.put(("notice", ("Orden rechazada", str(exc), True)))
+            incierto = isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
+            if incierto:
+                mensaje = (
+                    "Estado desconocido: revisa Posiciones y Órdenes antes de reenviar. "
+                    "No se hará un reintento automático."
+                )
+                self.session.refresh_positions()
+                self.session.refresh_orders()
+                titulo = "Estado de la orden desconocido"
+                detalle_log = type(exc).__name__
+            elif isinstance(exc, BrokerNoDisponibleError):
+                mensaje = str(exc)
+                titulo = "Broker no disponible"
+                detalle_log = type(exc).__name__
+            else:
+                mensaje = str(exc)
+                titulo = "Orden rechazada"
+                detalle_log = mensaje
+            self.session.log(f"ERR {side} {symbol}: {detalle_log}")
+            self.q.put(("order", (False, mensaje)))
+            self.q.put(("closed", mensaje))
+            self.q.put(("notice", (titulo, mensaje, True)))
 
     # ------------------------------------------------------------------ cierres
     def cerrar(self, pos, info=None):
@@ -507,8 +543,8 @@ class Control:
     def _cancel_varios(self, grupos):
         """Cancela por broker: Bitunix necesita el símbolo y MEXC no."""
         for nombre, ids in grupos.items():
-            cliente = self._cliente_de(nombre)
             try:
+                cliente = self._cliente_de(nombre)
                 cliente.cancel(ids)
                 self.session.log(f"OK  canceladas {nombre} {ids}")
                 self.q.put(("status", f"{len(ids)} orden(es) cancelada(s) en {nombre}."))
@@ -527,22 +563,33 @@ class Control:
         if not es_editable(order):
             self.port.status("Una orden de cierre solo se puede cancelar.")
             return
+        if es_condicional(order):
+            self.port.status("Las condicionales TP/SL de BingX se gestionan desde Posiciones.")
+            return
         if self.dry():
             self.port.status("DRY-RUN: no se reenvía la orden modificada")
             return
         symbol = order.get("symbol")
-        cliente = self.broker_de(order)
-        if (order.get("_exchange") or "mexc") in ("bitunix", "bingx"):
-            contract = cliente.contract(symbol)
-        else:
-            contract = self.session.contract_for(symbol)
+        exchange = order.get("_exchange") or "mexc"
+        try:
+            cliente = self.broker_de(order)
+            contract = (
+                cliente.contract(symbol)
+                if exchange in ("bitunix", "bingx")
+                else self.session.contract_for(symbol)
+            )
+        except Exception as exc:
+            self.port.status(f"No se pudo cargar el contrato de {symbol}: {exc}")
+            return
         if not contract:
             self.port.status(f"Falta el contrato de {symbol}: espera a que cargue el catálogo.")
             return
 
         def to_vol(notional, price):
             # contrato ya cacheado: el editor no pide nada a la red
-            return cliente.size_to_vol(symbol, notional, price, contract)
+            if exchange == "mexc":
+                return cliente.size_to_vol(symbol, notional, price, contract)
+            return cliente.size_to_qty(symbol, notional, price)
 
         form = self.port.editar_orden(order, contract, to_vol)
         if not form:
@@ -551,9 +598,9 @@ class Control:
 
     def _replace_worker(self, order, form):
         symbol = order.get("symbol")
-        cliente = self.broker_de(order)
         es_bnx = (order.get("_exchange") or "mexc") == "bitunix"
         try:
+            cliente = self.broker_de(order)
             if es_bnx:
                 # nativo: no hay ventana entre cancelar y reenviar
                 cliente.modify_order(order, form)

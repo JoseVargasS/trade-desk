@@ -231,8 +231,13 @@ class Bitunix:
             datos = respuesta.json()
         except ValueError:
             raise BitunixError(f"HTTP {respuesta.status_code}") from None
+        if not isinstance(datos, dict):
+            raise BitunixError(f"Respuesta invalida de Bitunix (HTTP {respuesta.status_code}).")
+        if not 200 <= respuesta.status_code < 300:
+            raise BitunixError(f"HTTP {respuesta.status_code}")
         codigo = datos.get("code")
-        if codigo not in (0, "0", None):
+        exito = (type(codigo) is int and codigo == 0) or codigo == "0"
+        if not exito:
             raise BitunixError(
                 f"{codigo}: {datos.get('msg') or datos.get('message') or ''}".strip()
             )

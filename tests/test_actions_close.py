@@ -3,9 +3,11 @@
 import queue
 import types
 
+import httpx
 import pytest
 
 from tradedesk import controller
+from tradedesk.mexc import MexcError
 
 
 class InlineThread:
@@ -292,3 +294,98 @@ def test_fallo_al_cancelar_publica_error_visible(app):
     )
 
     assert app.q.get_nowait() == ("error", "Error al cancelar en mexc: API no disponible")
+
+
+def test_orden_condicional_bingx_no_se_puede_editar(app):
+    app.modificar(
+        {
+            "_exchange": "bingx",
+            "type": "STOP_MARKET",
+            "side": 1,
+        }
+    )
+
+    assert app.port.mensajes == ["Las condicionales TP/SL de BingX se gestionan desde Posiciones."]
+
+
+def _form_abrir():
+    return {
+        "symbol": "BTC_USDT",
+        "notional": 100,
+        "lev": 1,
+        "open_type": 1,
+        "tp": None,
+        "sl": None,
+        "price": None,
+    }
+
+
+def test_timeout_al_abrir_avisa_estado_desconocido_y_refresca(app):
+    refrescos = []
+
+    def timeout(*_args, **_kwargs):
+        raise httpx.ReadTimeout("write timed out")
+
+    app.mx.open_market = timeout
+    app.session.refresh_positions = lambda: refrescos.append("positions")
+    app.session.refresh_orders = lambda: refrescos.append("orders")
+
+    app._do_abrir("LONG", _form_abrir(), False)
+
+    assert refrescos == ["positions", "orders"]
+    assert app.q.get_nowait() == (
+        "order",
+        (
+            False,
+            "Estado desconocido: revisa Posiciones y Órdenes antes de reenviar. "
+            "No se hará un reintento automático.",
+        ),
+    )
+    assert app.q.get_nowait()[0] == "closed"
+    assert app.q.get_nowait()[1][0] == "Estado de la orden desconocido"
+
+
+def test_rechazo_de_negocio_al_abrir_sigue_siendo_rechazo(app):
+    app.mx.open_market = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        MexcError("Saldo insuficiente")
+    )
+
+    app._do_abrir("LONG", _form_abrir(), False)
+
+    assert app.q.get_nowait() == ("order", (False, "Saldo insuficiente"))
+    assert app.q.get_nowait() == ("closed", "Saldo insuficiente")
+    assert app.q.get_nowait()[1][0] == "Orden rechazada"
+
+
+def test_broker_desconocido_no_enruta_a_mexc(app):
+    enviados = []
+    app.mx.open_market = lambda *_args, **_kwargs: enviados.append(True)
+
+    app._do_abrir("LONG", _form_abrir(), False, exchange="desconocido")
+
+    assert enviados == []
+    assert app.q.get_nowait() == (
+        "order",
+        (False, "Broker desconocido: desconocido."),
+    )
+    assert app.q.get_nowait() == ("closed", "Broker desconocido: desconocido.")
+    assert app.q.get_nowait()[1][0] == "Broker no disponible"
+
+
+@pytest.mark.parametrize("exchange", ("bitunix", "bingx"))
+def test_dry_run_usa_cantidad_y_unidad_del_broker(app, exchange):
+    class Cliente:
+        def price(self, _symbol):
+            return 100
+
+        def size_to_qty(self, _symbol, _notional, _price):
+            return 0.25
+
+    app.session.cliente = lambda _nombre: Cliente()
+
+    app._do_abrir("LONG", _form_abrir(), True, exchange=exchange)
+
+    assert app.q.get_nowait() == (
+        "order",
+        (True, "DRY-RUN LONG 0.25 BTC @ 100.00 (no enviado)"),
+    )

@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLineEdit, QWidget
 
 from .. import theme as t
-from ..forms import valores_orden
+from ..forms import limites_orden, orden_alcanza_minimo, valores_orden
 from ..mexc import margen_inicial, num_texto
 from .dialogos_base import Modal
 from .style import Segmentado, boton, etiqueta, fnt
@@ -24,6 +24,10 @@ class EditorOrden(Modal):
         self.a_vol = a_vol
         self.resultado = None
         self.scale = int(orden.get("_priceScale") or 2)
+        self.exchange = orden.get("_exchange") or "mexc"
+        self.unidad, self.minimo, self.paso, self.min_notional = limites_orden(
+            self.exchange, self.contrato
+        )
 
         self.columna.addWidget(
             etiqueta(orden.get("_name") or orden.get("symbol", ""), 12, muted=True)
@@ -114,9 +118,12 @@ class EditorOrden(Modal):
         try:
             vol = self.a_vol(nocional, precio)
         except Exception:
-            vol = 0
+            self.lbl_calc.setText("No se pudo calcular el tamaño.")
+            return
+        real = vol * precio * float(self.contrato.get("contractSize") or 1)
         self.lbl_calc.setText(
-            f"≈ {t.fmt_qty(vol)} contratos · {t.fmt_usdt(nocional)} USDT nocional"
+            f"≈ {t.fmt_qty(vol)} {self.unidad} · {t.fmt_usdt(real)} USDT"
+            f" (mín. {t.fmt_qty(self.minimo)}, paso {t.fmt_qty(self.paso)})"
         )
 
     def _guardar(self):
@@ -131,14 +138,11 @@ class EditorOrden(Modal):
         except Exception as exc:
             self.lbl_error.setText(str(exc)[:120])
             return
-        if vol < 1:
-            minimo = float(self.contrato.get("minVol") or 1) * float(
-                self.contrato.get("contractSize") or 0
-            )
-            self.lbl_error.setText(
-                f"Ese margen deja 0 contratos: sube el margen (mínimo ≈ "
-                f"{t.fmt_usdt(minimo * precio)} USDT con {lev}x)."
-            )
+        if not orden_alcanza_minimo(vol, precio, self.exchange, self.contrato):
+            detalle = f"mínimo {t.fmt_qty(self.minimo)} {self.unidad}"
+            if self.min_notional:
+                detalle += f" y {t.fmt_usdt(self.min_notional)} USDT"
+            self.lbl_error.setText(f"El tamaño no alcanza el {detalle}. Sube el margen.")
             return
         self.resultado = {
             "side": self.lado.elegida,

@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QWidget
 
 from .. import theme as t
+from ..bingx import es_condicional
 from ..layout import ORDER_ACTION_W, ORDER_COLS, ORDER_PENCILS, ORDER_ROW_H, STATES
 from .cells import CeldaLapiz, lineas, tabla
 from .formato import cuando
@@ -26,6 +27,7 @@ class TablaOrdenes:
         tabla = self._tabla_ord
         tabla.setRowCount(len(ordenes))
         for fila, orden in enumerate(ordenes):
+            condicional_bingx = es_condicional(orden)
             escala = int(orden.get("_priceScale") or 2)
             lado = int(orden.get("side") or 0)
             largo = lado in (1, 4)
@@ -92,7 +94,7 @@ class TablaOrdenes:
                 item.setData(Qt.UserRole, valores.get(clave, lineas(("—", 13, False, t.MUTED))))
                 item.setTextAlignment(Qt.AlignRight if anclaje == "e" else Qt.AlignLeft)
                 tabla.setItem(fila, columna, item)
-                if clave in ORDER_PENCILS:
+                if clave in ORDER_PENCILS and not condicional_bingx:
                     tabla.setCellWidget(
                         fila,
                         columna,
@@ -108,11 +110,12 @@ class TablaOrdenes:
             fila_acciones = QHBoxLayout(acciones)
             fila_acciones.setContentsMargins(4, 0, 8, 0)
             fila_acciones.setSpacing(6)
-            modificar = _boton("Modificar", 84, 26)
             cancelar = _boton("Cancelar", 84, 26, t.INPUT, t.RED)
-            modificar.clicked.connect(lambda _=False, o=orden: self.control.modificar(o))
             cancelar.clicked.connect(lambda _=False, o=orden: self.control.cancelar(o))
-            fila_acciones.addWidget(modificar)
+            if not condicional_bingx:
+                modificar = _boton("Modificar", 84, 26)
+                modificar.clicked.connect(lambda _=False, o=orden: self.control.modificar(o))
+                fila_acciones.addWidget(modificar)
             fila_acciones.addWidget(cancelar)
             tabla.setCellWidget(fila, len(ORDER_COLS), acciones)
         self._lbl_ordenes.setText(

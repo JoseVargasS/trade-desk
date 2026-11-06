@@ -78,3 +78,38 @@ def valores_orden(lev, margen, precio, tp, sl):
     if niveles[0] < 1 or niveles[1] <= 0 or niveles[2] <= 0 or niveles[3] < 0 or niveles[4] < 0:
         return None
     return int(niveles[0]), niveles[1], niveles[2], niveles[3], niveles[4]
+
+
+def limites_orden(exchange, contract):
+    """(unidad, mínimo, paso, nocional mínimo) para el editor de órdenes."""
+    if exchange == "mexc":
+        return (
+            "contratos",
+            float(contract.get("minVol") or 1),
+            float(contract.get("volUnit") or 1),
+            0.0,
+        )
+    if exchange == "bitunix":
+        paso = float(contract.get("qtyStep") or 0.0001)
+        return contract.get("base") or "monedas", paso, paso, 0.0
+    if exchange == "bingx":
+        paso = float(contract.get("minQty") or 0.0001)
+        return (
+            contract.get("base") or "monedas",
+            paso,
+            paso,
+            float(contract.get("minNotional") or 0),
+        )
+    raise ValueError(f"Broker desconocido: {exchange}")
+
+
+def orden_alcanza_minimo(vol, precio, exchange, contract):
+    """Valida volumen, paso y nocional mínimo usando la unidad del broker."""
+    _unidad, minimo, paso, nocional_minimo = limites_orden(exchange, contract)
+    cantidad = float(vol or 0)
+    if cantidad < minimo or paso <= 0:
+        return False
+    if not math.isclose(cantidad / paso, round(cantidad / paso), abs_tol=1e-7):
+        return False
+    nocional = cantidad * float(precio or 0) * float(contract.get("contractSize") or 1)
+    return nocional >= nocional_minimo

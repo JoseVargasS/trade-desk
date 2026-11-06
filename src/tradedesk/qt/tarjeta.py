@@ -360,18 +360,25 @@ class Tarjeta(QFrame):
             self.lbl_resumen.setText(PISTAS)
             return
         contrato = self.tarjeta["contrato"] or {}
-        if exchange == "bitunix":
-            qty = cliente.size_to_qty(self.tarjeta["symbol"], nocional, precio)
-            real = cliente.qty_to_usdt(self.tarjeta["symbol"], qty, precio)
-            unidad = contrato.get("base") or "monedas"
-            self.lbl_resumen.setText(f"{t.fmt_qty(qty)} {unidad} · {t.fmt_usdt(real)} USDT")
-            return
-        vol = cliente.size_to_vol(self.tarjeta["symbol"], nocional, precio, contract=contrato)
-        real = cliente.vol_to_usdt(self.tarjeta["symbol"], vol, precio)
-        fee = cliente.est_fee(self.tarjeta["symbol"], real)
-        liq_l = cliente.est_liq(self.tarjeta["symbol"], precio, palanca, "LONG")
-        liq_s = cliente.est_liq(self.tarjeta["symbol"], precio, palanca, "SHORT")
-        self.lbl_resumen.setText(
-            f"{vol:.0f} contratos · {real:,.2f} USDT\n"
-            f"fee {fee:.4f} · liq {liq_l:,.2f} / {liq_s:,.2f}"
-        )
+        try:
+            if exchange in ("bitunix", "bingx"):
+                qty = cliente.size_to_qty(self.tarjeta["symbol"], nocional, precio)
+                real = cliente.qty_to_usdt(self.tarjeta["symbol"], qty, precio)
+                unidad = contrato.get("base") or self.tarjeta["symbol"].split("_")[0]
+                resumen = f"{t.fmt_qty(qty)} {unidad} · {t.fmt_usdt(real)} USDT"
+                if exchange == "bingx":
+                    fee = real * float(contrato.get("takerFeeRate") or 0)
+                    resumen += f"\nfee estimada {t.fmt_fee(fee)}"
+                self.lbl_resumen.setText(resumen)
+                return
+            vol = cliente.size_to_vol(self.tarjeta["symbol"], nocional, precio, contract=contrato)
+            real = cliente.vol_to_usdt(self.tarjeta["symbol"], vol, precio)
+            fee = cliente.est_fee(self.tarjeta["symbol"], real)
+            liq_l = cliente.est_liq(self.tarjeta["symbol"], precio, palanca, "LONG")
+            liq_s = cliente.est_liq(self.tarjeta["symbol"], precio, palanca, "SHORT")
+            self.lbl_resumen.setText(
+                f"{vol:.0f} contratos · {real:,.2f} USDT\n"
+                f"fee {fee:.4f} · liq {liq_l:,.2f} / {liq_s:,.2f}"
+            )
+        except Exception as exc:
+            self.lbl_resumen.setText(f"No se pudo calcular el resumen ({type(exc).__name__}).")

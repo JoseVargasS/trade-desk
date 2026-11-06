@@ -9,7 +9,16 @@ import hmac
 
 import pytest
 
-from tradedesk.bingx import Bingx, BingxError, canonico, decorate_positions, display_name, largo
+from tradedesk.bingx import (
+    Bingx,
+    BingxError,
+    canonico,
+    decorate_orders,
+    decorate_positions,
+    display_name,
+    es_condicional,
+    largo,
+)
 
 CONTRATO = {
     "symbol": "BTC-USDT",
@@ -47,6 +56,48 @@ def test_simbolos():
     assert canonico("BTC_USDT") == "BTC-USDT"
     assert canonico("BTCUSDT") == "BTC-USDT"
     assert display_name("BTC-USDT") == "BTCUSDT"
+
+
+def test_condicionales_bingx_se_identifican_sin_marcar_limites_normales():
+    cliente, _enviados = armado()
+    ordenes = decorate_orders(
+        cliente,
+        [
+            {
+                "symbol": "BTC-USDT",
+                "type": "STOP_MARKET",
+                "side": "SELL",
+                "positionSide": "LONG",
+                "stopPrice": "69000",
+                "quantity": "0.0001",
+                "orderId": "stop",
+            },
+            {
+                "symbol": "BTC-USDT",
+                "type": "TAKE_PROFIT_MARKET",
+                "side": "SELL",
+                "positionSide": "LONG",
+                "stopPrice": "84000",
+                "quantity": "0.0001",
+                "orderId": "take-profit",
+            },
+            {
+                "symbol": "BTC-USDT",
+                "type": "LIMIT",
+                "side": "BUY",
+                "positionSide": "LONG",
+                "quantity": "0.0001",
+                "orderId": "limit",
+            },
+        ],
+    )
+
+    assert es_condicional(ordenes[0])
+    assert ordenes[0]["price"] == 69000
+    assert ordenes[0]["stopLossPrice"] == 69000
+    assert es_condicional(ordenes[1])
+    assert ordenes[1]["takeProfitPrice"] == 84000
+    assert not es_condicional(ordenes[2])
 
 
 def test_largo_entiende_strings_y_bools():

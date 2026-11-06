@@ -4,7 +4,9 @@ Sin red: se intercepta `_post` y se miran las rutas y el cuerpo. La red se prueb
 a mano con `tools/probe_bitunix.py`.
 """
 
-from tradedesk.bitunix import Bitunix, canonico, con_guion
+import pytest
+
+from tradedesk.bitunix import Bitunix, BitunixError, canonico, con_guion
 
 CONTRATO = {
     "symbol": "BTCUSDT",
@@ -39,6 +41,45 @@ def payload_de(enviados, ruta):
 def test_simbolos():
     assert canonico("BTC_USDT") == "BTCUSDT"
     assert con_guion("BTCUSDT") == "BTC_USDT"
+
+
+@pytest.mark.parametrize("codigo", (0, "0"))
+def test_bitunix_acepta_solo_codigo_explicito_de_exito(codigo):
+    class Respuesta:
+        status_code = 200
+
+        def json(self):
+            return {"code": codigo, "data": {"ok": True}}
+
+    assert Bitunix._leer(Respuesta()) == {"ok": True}
+
+
+@pytest.mark.parametrize("codigo", (None, True, 1, ""))
+def test_bitunix_rechaza_codigo_ausente_o_ambiguo(codigo):
+    class Respuesta:
+        status_code = 200
+
+        def json(self):
+            return {"code": codigo, "data": {"ok": True}}
+
+    with pytest.raises(BitunixError):
+        Bitunix._leer(Respuesta())
+
+
+def test_bitunix_rechaza_respuesta_sin_objeto_o_http_no_exitoso():
+    class Respuesta:
+        status_code = 500
+
+        def json(self):
+            return {"code": 0, "data": {"ok": True}}
+
+    with pytest.raises(BitunixError, match="HTTP 500"):
+        Bitunix._leer(Respuesta())
+
+    Respuesta.status_code = 200
+    Respuesta.json = lambda self: []
+    with pytest.raises(BitunixError, match="Respuesta invalida"):
+        Bitunix._leer(Respuesta())
 
 
 def test_abrir_mercado_long():

@@ -180,6 +180,8 @@ def decorate_orders(bingx, ordenes):
     for orden in ordenes or ():
         symbol = canonico(orden.get("symbol"))
         contrato = bingx.contract(symbol)
+        tipo_orden = _texto(orden, "type").upper()
+        precio_stop = _numero(orden, "stopPrice")
         side = _texto(orden, "side").upper()
         lado = _texto(orden, "positionSide").upper()
         largo = side == "BUY"
@@ -188,6 +190,15 @@ def decorate_orders(bingx, ordenes):
         tipo = tipos[(lado if lado in ("SHORT", "LONG") else "LONG", abriendo)]
         cantidad = _numero(orden, "quantity", "origQty")
         llenado = _numero(orden, "executedQty", "cumQty")
+        tp = _numero(orden, "takeProfitPrice", "tpPrice")
+        sl = _numero(orden, "stopLossPrice", "slPrice")
+        if "TAKE_PROFIT" in tipo_orden:
+            tp = tp or precio_stop
+        elif "STOP" in tipo_orden:
+            sl = sl or precio_stop
+        precio = _numero(orden, "price")
+        if not precio and ("STOP" in tipo_orden or "TAKE_PROFIT" in tipo_orden):
+            precio = precio_stop
         salida.append(
             {
                 **orden,
@@ -197,7 +208,9 @@ def decorate_orders(bingx, ordenes):
                 "vol": cantidad,
                 "dealVol": llenado,
                 "dealAvgPrice": _numero(orden, "avgPrice", "price"),
-                "price": _numero(orden, "price"),
+                "price": precio,
+                "takeProfitPrice": tp,
+                "stopLossPrice": sl,
                 "profit": _numero(orden, "profit"),
                 "totalFee": abs(_numero(orden, "commission", "fee")),
                 "leverage": _apalancamiento(orden.get("leverage")),
@@ -211,6 +224,12 @@ def decorate_orders(bingx, ordenes):
             }
         )
     return salida
+
+
+def es_condicional(orden):
+    """TP/SL condicional de BingX: visible y cancelable, no editable."""
+    tipo = _texto(orden or {}, "type").upper()
+    return (orden or {}).get("_exchange") == "bingx" and ("STOP" in tipo or "TAKE_PROFIT" in tipo)
 
 
 # --------------------------------------------------------------------- cliente
