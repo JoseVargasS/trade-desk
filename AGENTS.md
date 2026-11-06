@@ -20,10 +20,10 @@ el acceso directo, o la app deja de abrir con doble clic.
 **Entorno y verificación** (Windows, Python 3.11+):
 
 ```powershell
-pip install -e ".[dev]"     # deps de la app + pytest/ruff/pre-commit
-python -m pytest            # 181 tests recopilados (verifica la cuenta actual antes de citarla)
-python -m ruff check .      # lint
-python -m ruff format .     # formato (obligatorio: CI corre --check)
+uv sync --locked --extra dev
+uv run --locked python -m pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
 scripts\check.bat           # lint + formato + tests de una
 ```
 
@@ -152,7 +152,7 @@ raiz/
     archivo.py               operaciones guardadas en disco (upsert)        134
     operaciones.py           empareja órdenes en operaciones (historial)    213
     session.py               pollers, cola, config y caches sin UI          577
-    controller.py            casos de uso: abrir, cerrar, TP/SL, órdenes   654
+    controller.py            casos de uso: abrir, cerrar, TP/SL, órdenes  1.054
     mexc.py                  firma, endpoints, USDT->contratos, fee, liq    568
     bitunix.py               firma, endpoints, monedas (qty), specs        564
     bingx.py                 firma, endpoints, monedas (qty), specs        610
@@ -186,9 +186,11 @@ raiz/
   docs/PLAN.md              plan de trabajo vivo (fases, estado, bitacora)
 ```
 
-**El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.** Al último conteo
-ningún módulo supera el objetivo: los más grandes son `controller.py` (654) y `bingx.py`
-(610); el mayor de la interfaz es `ventana.py` (540). `qt/view.py` y `qt/dialogs.py` quedaron como
+**El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.** En esta rama,
+`controller.py` (1.041) supera el objetivo; queda pendiente separar responsabilidades en un
+cambio dedicado para no mezclar ese refactor con el endurecimiento. El siguiente módulo más
+grande es `bingx.py` (610); el mayor de la interfaz es `ventana.py` (540).
+`qt/view.py` y `qt/dialogs.py` quedaron como
 **fachadas** que reexportan: así los imports de `__main__.py`, `tools/smoke_live.py` y de la
 propia vista no cambiaron. Si un archivo se acerca al tope, se parte igual: módulo nuevo +
 fachada, sin tocar los call sites.
@@ -500,6 +502,18 @@ en la cabecera con botón para copiarla.
 - DRY-RUN bloquea abrir, cerrar y reverse; TP/SL, margen y cancelar pasan siempre. Es la red de
   seguridad principal.
 - La app no escucha puertos ni corre nada en segundo plano al cerrarse.
+- `uv.lock` fija las dependencias con versiones y hashes. CI instala con `uv sync --locked`,
+  ejecuta `pip-audit` y Gitleaks, y fija cada GitHub Action por SHA; Dependabot revisa
+  dependencias Python y acciones semanalmente.
+- Ante timeout de abrir, cerrar, cerrar todo, reverse o TP/SL (incluido Break-even), el
+  resultado puede ser desconocido: avisar, refrescar Posiciones/Órdenes y no reenviar. Un
+  worker de solo lectura coteja Posiciones/Órdenes y TP/SL con el broker; confirma únicamente
+  si encuentra el estado esperado. Si no puede consultar o no encuentra evidencia, lo indica
+  y pide revisión manual. Se detiene al cerrar la app; nunca reenvía la escritura.
+- Si no se puede leer `operaciones.json`, conservar una copia fechada (máximo tres) y no
+  sobrescribir el original. Fallos de guardar o respaldar se reportan en la barra de estado.
+- El fallback existente de Bitunix a `HEDGE` cuando falla la consulta de modo se conserva
+  para no cambiar payloads; el fallo debe quedar visible en la UI.
 
 **Pruebas de escritura (regla dura).** Nunca se manda una orden a un par donde el
 usuario tenga posición abierta: en hedge, una apertura del mismo lado se **suma** a la
@@ -766,35 +780,38 @@ los avisos se encolan fuera del drain (§6).
 ## 9. Cómo correr y verificar
 
 ```powershell
-python app.py                 # lanzador del acceso directo, con consola para ver errores
-python -m tradedesk           # lo mismo, con PYTHONPATH=src
-python -m tradedesk.qt        # abre la vista Qt directamente
-python -m pytest              # 181 tests: logica pura, payloads, parseo y workers
-python -m ruff check .        # lint
-python -m ruff format --check .   # formato (lo que corre el CI)
+uv run --locked python app.py
+uv run --locked python -m tradedesk
+uv run --locked python -m tradedesk.qt
+uv run --locked python -m pytest
+uv run --locked ruff check .
+uv run --locked ruff format --check .
 scripts\check.bat             # las tres cosas juntas
 
-python tools/smoke_api.py     # red real: precio, contrato, USDT -> contratos
-python tools/check_account.py # consulta la cuenta real: saldo, posiciones, historial
-python tools/smoke_live.py 9  # arranca 9 s, pinta posiciones y ordenes, cierra sola
-python tools/qt_probe.py      # ms de repintado (objetivo <= 60)
+uv run --locked python tools/smoke_api.py
+uv run --locked python tools/check_account.py
+uv run --locked python tools/smoke_live.py 9
+uv run --locked python tools/qt_probe.py
 ```
 
 **Qué correr según lo que se tocó** (nada más que eso; la suite completa solo al commitear):
 
 | Se tocó | Correr |
 |---|---|
-| `theme.py` (formato, color, fuente) | `python -m pytest tests/test_theme.py` |
-| `layout.py` (anchos de tabla) | `python -m pytest tests/test_layout.py` |
-| `mexc.py` (payload, `vol`, precio, fee) | `python -m pytest tests/test_mexc_orders.py tests/test_mexc_pure.py` |
-| `controller.py` (hilos, cola, cierre, TP/SL, órdenes) | `python -m pytest tests/test_no_threaded_widgets.py tests/test_actions_close.py tests/test_mexc_orders.py` |
-| `session.py` (pollers, config, catálogo) | `python -m pytest tests/test_session_polling.py tests/test_paths.py` + `python tools/smoke_live.py 9` |
-| `forms.py` (parseo de tarjeta/editor) | `python -m pytest tests/test_forms.py` |
-| `pairs.py`, `qt/search.py` (buscador) | `python -m pytest tests/test_search.py` |
-| `pnl.py` (neto del historial) | `python -m pytest tests/test_pnl.py` |
-| `qt/tabla_historial.py` (actualización incremental) | `python -m pytest tests/test_history_render.py` |
+| `theme.py` (formato, color, fuente) | `uv run --locked python -m pytest tests/test_theme.py` |
+| `layout.py` (anchos de tabla) | `uv run --locked python -m pytest tests/test_layout.py` |
+| `mexc.py` (payload, `vol`, precio, fee) | `uv run --locked python -m pytest tests/test_mexc_orders.py tests/test_mexc_pure.py tests/test_phase4_visibility.py` |
+| `controller.py` (hilos, cola, cierre, TP/SL, órdenes) | `uv run --locked python -m pytest tests/test_no_threaded_widgets.py tests/test_actions_close.py tests/test_mexc_orders.py` |
+| `session.py` (pollers, config, catálogo, logs) | `uv run --locked python -m pytest tests/test_session_polling.py tests/test_paths.py tests/test_datos_fase3.py tests/test_phase4_visibility.py` |
+| `archivo.py` (historial local y respaldos) | `uv run --locked python -m pytest tests/test_archivo.py tests/test_datos_fase3.py` |
+| `bitunix.py` (modo de cuenta y payloads) | `uv run --locked python -m pytest tests/test_bitunix_orders.py` |
+| `bingx.py` (fees y payloads) | `uv run --locked python -m pytest tests/test_bingx_orders.py tests/test_phase4_visibility.py` |
+| `forms.py` (parseo de tarjeta/editor) | `uv run --locked python -m pytest tests/test_forms.py` |
+| `pairs.py`, `qt/search.py` (buscador) | `uv run --locked python -m pytest tests/test_search.py` |
+| `pnl.py` (neto del historial) | `uv run --locked python -m pytest tests/test_pnl.py` |
+| `qt/tabla_historial.py` (actualización incremental) | `uv run --locked python -m pytest tests/test_history_render.py` |
 | `qt/ventana.py`, otras `qt/tabla_*.py`, `qt/cierre.py`, `qt/dialogos_base.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
-| `__main__.py`, `app.py` (arranque) | `python -m pytest tests/test_launcher.py` |
+| `__main__.py`, `app.py` (arranque) | `uv run --locked python -m pytest tests/test_launcher.py` |
 | docs, comentarios, README | nada |
 
 Si el cambio es de texto, formato o color: **captura** y listo, sin tests. Si dudas de qué test cubre algo, preguntar antes de correr la suite entera. Los tests actuales

@@ -3,9 +3,9 @@ REM Verificacion local antes de entregar: lint, formato y tests.
 REM Uso: scripts\check.bat
 cd /d "%~dp0.."
 
-python -m ruff check . || goto :fallo
-python -m ruff format --check . || goto :fallo
-python -m pytest || goto :fallo
+uv run --locked ruff check . || goto :fallo
+uv run --locked ruff format --check . || goto :fallo
+uv run --locked python -m pytest || goto :fallo
 
 echo.
 echo OK: lint, formato y tests

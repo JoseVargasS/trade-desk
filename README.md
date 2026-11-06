@@ -129,7 +129,7 @@ src/tradedesk/          la app
   paths.py              dónde viven los datos y los assets
   qt/                   ventana, tarjetas, diálogos, estilos y buscador (PySide6)
   assets/               iconos y fuentes Geist
-tests/                  pruebas (pytest): 181 recopiladas
+tests/                  pruebas (pytest)
 tools/                  utilidades: icono, chequeos contra la API y la cuenta
 docs/DESIGN.md          sistema de diseño
 docs/PLAN.md            plan de trabajo vivo (fases, estado y bitácora)
@@ -139,14 +139,15 @@ AGENTS.md               reglas para agentes
 Los datos (`config.json`, `operaciones.json`, `trades.log`) viven en la raíz del repo y git los
 ignora.
 
-Requiere Python 3.11+: `pip install -e ".[dev]"` (o `pip install PySide6-Essentials httpx keyring`).
+Requiere Python 3.11+ y [uv](https://docs.astral.sh/uv/):
+`uv sync --locked --extra dev`.
 
 Verificación:
 
 ```powershell
-scripts\check.bat             # lint + formato + tests
-python -m pytest              # solo los tests
-python tools/smoke_api.py     # red: precio, contrato, conversión de tamaño
-python tools/smoke_live.py 9  # abre la app 9 s con la cuenta real y la cierra
-python tools/check_account.py # consulta la cuenta: saldo, posiciones, historial
+scripts\check.bat                         # lint + formato + tests
+uv run --locked python -m pytest          # solo los tests
+uv run --locked python tools/smoke_api.py # red: precio, contrato, conversión de tamaño
+uv run --locked python tools/smoke_live.py 9
+uv run --locked python tools/check_account.py
 ```
