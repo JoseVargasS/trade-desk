@@ -64,6 +64,9 @@ documento (AGENTS) describe cómo está el código **hoy**, no cómo debería es
 - **El formato lo valida un hook**: `scripts/commit-msg` se copia a `.git/hooks/commit-msg`
   (`Copy-Item scripts\commit-msg .git\hooks\commit-msg`). Rechaza los mensajes sin tipo
   válido o con descripción de más de 72 caracteres.
+- **Solo commits y push directo a `master`.** El usuario es el único que maneja el repo: no se
+  abren pull requests ni se activa Dependabot, porque ensucian el historial con merges. Las
+  actions se actualizan a mano en el mismo commit.
 
 ---
 
@@ -503,8 +506,8 @@ en la cabecera con botón para copiarla.
   seguridad principal.
 - La app no escucha puertos ni corre nada en segundo plano al cerrarse.
 - `uv.lock` fija las dependencias con versiones y hashes. CI instala con `uv sync --locked`,
-  ejecuta `pip-audit` y Gitleaks, y fija cada GitHub Action por SHA; Dependabot revisa
-  dependencias Python y acciones semanalmente.
+  ejecuta `pip-audit` y Gitleaks, y fija cada GitHub Action por SHA. Las actions y las
+  dependencias se actualizan a mano: no hay Dependabot.
 - Ante timeout de abrir, cerrar, cerrar todo, reverse o TP/SL (incluido Break-even), el
   resultado puede ser desconocido: avisar, refrescar Posiciones/Órdenes y no reenviar. Un
   worker de solo lectura coteja Posiciones/Órdenes y TP/SL con el broker; confirma únicamente
