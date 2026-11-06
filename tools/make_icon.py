@@ -38,6 +38,7 @@ def main():
     big = build()
     big.save(
         ASSETS / "icon.ico",
+        bitmap_format="bmp",
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
     )
     big.resize((256, 256), Image.LANCZOS).save(ASSETS / "icon.png")
