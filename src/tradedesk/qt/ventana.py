@@ -326,6 +326,8 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         animan a su slot nuevo, como si la primera las empujara.
         """
         if accion == "inicio":
+            if tarjeta not in self._cartas:
+                return  # una caja que no esta en el deck no se arrastra
             self._arrastrada = tarjeta
             self._desfase = punto  # punto donde se agarró, en coords de la tarjeta
             self._destino = self._cartas.index(tarjeta) if tarjeta in self._cartas else 0
@@ -554,10 +556,18 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         Antes se borraban todas: al añadir un par se reconstruia el deck entero
         y se perdia lo escrito en el tamaño, TP y SL de las demas cajas.
         """
+        # la sesion es la fuente de verdad de que tarjetas existen: un mensaje
+        # atrasado puede traer una tarjeta que ya se borro y la resucitaria
+        vivos = {t["id"] for t in self.session.tarjetas}
+        tarjetas = [d for d in tarjetas if d["id"] in vivos]
         viejas = dict(self._tarjetas)
         clientes = dict(self.session.clientes())
         orden = []
+        vistos = set()
         for datos in tarjetas:
+            if datos["id"] in vistos:
+                continue  # el mismo id dos veces: una sola tarjeta
+            vistos.add(datos["id"])
             widget = viejas.pop(datos["id"], None)
             if widget is None:
                 widget = Tarjeta(
@@ -592,7 +602,13 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
 
     def _quitar_par(self, ident):
         self.session.remove_card(ident)
-        self._tarjetas.pop(ident, None)
+        widget = self._tarjetas.pop(ident, None)
+        if widget is not None:
+            # si la caja no se destruye aqui queda pegada en la ventana como
+            # fantasma y al volver a agregar el par aparece una duplicada
+            self._cartas = [c for c in self._cartas if c is not widget]
+            widget.hide()
+            widget.deleteLater()
 
 
 def build_main_window():

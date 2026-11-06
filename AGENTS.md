@@ -141,7 +141,7 @@ es abrir.
 ```
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
-  src/tradedesk/            (7.482 líneas Python; conteo de referencia al 2026-11-06)
+  src/tradedesk/            (7.498 líneas Python; conteo de referencia al 2026-11-06)
     __init__.py              inicialización del paquete                      2
     __main__.py              arranque: AppUserModelID + vista Qt            14
     paths.py                 DATA_DIR (raíz) y ASSETS (paquete)             10
@@ -164,7 +164,7 @@ raiz/
       __init__.py           inicialización del paquete                       0
       __main__.py           abre la ventana                                 31
       view.py               fachada: reexporta VistaQt                       6
-      ventana.py            cabecera, deck arrastrable, pestañas, drenaje   540
+      ventana.py            cabecera, deck arrastrable, pestañas, drenaje   556
       tabla_posiciones.py   filas, resumen bruto/neto, globo de la fee     306
       tabla_ordenes.py      órdenes abiertas (panel estilo MEXC)           115
       tabla_historial.py    una fila por operación, con su neto            138
@@ -182,7 +182,7 @@ raiz/
       cells.py              delegado, celdas con lápiz, spinner, bocadillo 295
       search.py             buscador de pares                               72
       shell.py              ventana de prueba para medir repintado        134
-  tests/                    pytest (213 tests recopilados): lógica, payloads y UI fake
+  tests/                    pytest (217 tests recopilados): lógica, payloads y UI fake
   tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
   scripts/check.bat         lint + formato + tests
   docs/DESIGN.md            sistema de diseno
@@ -622,6 +622,12 @@ cantidad exactos de lo que abrió el script.
 - **El deck reusa las tarjetas**: `_pintar_deck` crea solo la nueva y destruye solo la que
   se quitó (antes borraba y recreaba todas, y al añadir un par se perdía lo escrito en el
   tamaño, TP, SL y apalancamiento de las demás cajas).
+- **Al borrar una tarjeta, su widget se destruye** (`_quitar_par`: sale del deck, `hide()` y
+  `deleteLater()`). Si se solo la saca del mapa, la caja queda pegada en la ventana como
+  fantasma y al volver a agregar el mismo par aparecen **dos tarjetas iguales**. Además
+  `_pintar_deck` ignora las tarjetas que la sesión ya no tiene (un mensaje atrasado no
+  resucita una tarjeta borrada) y nunca crea dos widgets para el mismo id.
+- Una tarjeta que no está en el deck **no se arrastra** (`_arrastre_tarjeta` la ignora).
 - Las tarjetas se **arrastran en vivo** para reordenarlas. La fila **no usa layout**: las
   tarjetas se colocan a mano en un lienzo (`_lienzo`) a `indice * (286 + 10)`, así cada una
   puede animarse sola. Al arrastrar, la tarjeta agarrada sigue al cursor por encima del
