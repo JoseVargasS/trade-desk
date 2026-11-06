@@ -11,6 +11,7 @@ la vista Qt y el que queda cuando se retire la vista Tk (F6).
 """
 
 import json
+import os
 import queue
 import threading
 import time
@@ -70,6 +71,8 @@ class Session:
         # el historial guardado se pinta al instante, sin esperar a la red
         if self.archivo.filas:
             self.q.put(("history", self.archivo.todas()))
+        if getattr(self.archivo, "aviso", None):
+            self.q.put(("notice", self.archivo.aviso))
 
     # --------------------------------------------------------------- tarjetas
     def cliente(self, exchange):
@@ -140,12 +143,19 @@ class Session:
         self._guardar_config()
 
     def _guardar_config(self):
+        ruta = paths.DATA_DIR / "config.json"
+        temporal = ruta.with_name(ruta.name + ".tmp")
         try:
-            (paths.DATA_DIR / "config.json").write_text(
-                json.dumps({"cards": self.tarjetas}, indent=2), encoding="utf-8"
-            )
-        except Exception:
-            pass
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            temporal.write_text(json.dumps({"cards": self.tarjetas}, indent=2), encoding="utf-8")
+            os.replace(temporal, ruta)
+        except Exception as exc:
+            self.log(f"ERR config: {exc}")
+            self.q.put(("status", f"No se pudo guardar config.json: {exc}"))
+            try:
+                temporal.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _publicar(self):
         """Contrato y precio de cada tarjeta, con el broker que eligió."""
@@ -256,10 +266,28 @@ class Session:
     def log(self, msg):
         from datetime import datetime
 
+        ruta = paths.DATA_DIR / "trades.log"
         try:
-            with open(str(paths.DATA_DIR / "trades.log"), "a", encoding="utf-8") as f:
+            self._rotar_log(ruta)
+            with open(str(ruta), "a", encoding="utf-8") as f:
                 f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}\n")
         except Exception:
+            pass
+
+    @staticmethod
+    def _rotar_log(ruta, limite=1_000_000, copias=3):
+        try:
+            if not ruta.exists() or ruta.stat().st_size < limite:
+                return
+            for indice in range(copias, 0, -1):
+                origen = ruta if indice == 1 else ruta.with_name(f"{ruta.name}.{indice - 1}")
+                destino = ruta.with_name(f"{ruta.name}.{indice}")
+                if origen.exists():
+                    try:
+                        os.replace(origen, destino)
+                    except OSError:
+                        pass
+        except OSError:
             pass
 
     def refresh_positions(self):
