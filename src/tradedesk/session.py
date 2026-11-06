@@ -1,13 +1,8 @@
-"""Estado y pollers sin UI: la base que comparten la app de Tk y la vista Qt.
+"""Estado y polling sin UI para MEXC, Bitunix y BingX.
 
-Solo **lee** de MEXC (tickers, posiciones y órdenes) y publica mensajes en una cola:
-`("cards", ...)`, `("ticker", symbol, precio)`, `("positions", ...)`, `("orders", ...)`,
-`("error", texto)`. No envía órdenes, no abre diálogos y no toca widgets: eso queda en
-cada UI. Los previews de las tarjetas se calculan en la UI con las funciones puras de
-`mexc` (`size_to_vol`, `vol_to_usdt`, `est_fee`, `est_liq`).
-
-La app de Tkinter todavía tiene su propio poller en `app.py`; este módulo es el que usa
-la vista Qt y el que queda cuando se retire la vista Tk (F6).
+Los workers consultan datos y publican resultados por `self.q`; no envían órdenes,
+abren diálogos ni tocan widgets. El ticker, la cuenta y las tareas secundarias usan
+ciclos independientes para que una consulta lenta no detenga las otras actualizaciones.
 """
 
 import json
@@ -445,6 +440,8 @@ class Session:
             self._cargar_catalogo,
             self._cargar_ip,
             self._poll,
+            self._poll_cuenta,
+            self._poll_secundario,
         ):
             hilo = threading.Thread(target=objetivo, daemon=True)
             hilo.start()
@@ -539,11 +536,6 @@ class Session:
 
     def _poll(self):
         indice = 0
-        proximo = 0.0
-        proximo_hist = 0.0
-        proximo_saldos = SALDOS_SEG
-        proximo_fondos = FONDOS_SEG
-        proximo_ip = IP_SEG
         espera = TICKER_SEG
         while not self._parar.is_set():
             fallo = False
@@ -569,9 +561,17 @@ class Session:
                     except Exception as exc:
                         fallo = True
                         self.q.put(("error", f"precio {symbol}: {exc}"))
+            espera = min(5.0, espera * 2) if fallo else TICKER_SEG
+            self._parar.wait(espera)
+
+    def _poll_cuenta(self):
+        """Actualiza posiciones y órdenes sin frenar el hilo de precios."""
+        proximo = 0.0
+        espera = POSICIONES_SEG
+        while not self._parar.is_set():
             ahora = time.monotonic()
             if ahora >= proximo:
-                proximo = ahora + POSICIONES_SEG
+                fallo = False
                 try:
                     posiciones = self.posiciones_todas()
                     self.ultimas_posiciones = posiciones
@@ -586,9 +586,24 @@ class Session:
                 except Exception as exc:
                     fallo = True
                     self.q.put(("error", f"órdenes: {exc}"))
+                espera = min(5.0, espera * 2) if fallo else POSICIONES_SEG
+                proximo = ahora + espera
+            self._parar.wait(max(0.0, proximo - time.monotonic()))
+
+    def _poll_secundario(self):
+        """Ejecuta historial, saldos, funding e IP fuera del ciclo caliente."""
+        proximo_hist = 0.0
+        proximo_saldos = time.monotonic() + SALDOS_SEG
+        proximo_fondos = time.monotonic() + FONDOS_SEG
+        proximo_ip = time.monotonic() + IP_SEG
+        while not self._parar.is_set():
+            ahora = time.monotonic()
             if self.ver_historial and ahora >= proximo_hist:
                 proximo_hist = ahora + HISTORIAL_SEG
-                self.cargar_historial()
+                try:
+                    self.cargar_historial()
+                except Exception as exc:
+                    self.q.put(("error", f"historial: {exc}"))
             if ahora >= proximo_saldos:
                 proximo_saldos = ahora + SALDOS_SEG
                 self.refresh_saldos()
@@ -599,6 +614,7 @@ class Session:
                 # la IP cambia (o el ISP la rota): se revalida cada 15 min
                 proximo_ip = ahora + IP_SEG
                 self._cargar_ip()
-            # si algo falla (tipico: 510 Demasiadas peticiones) se afloja el ritmo
-            espera = min(5.0, espera * 2) if fallo else TICKER_SEG
-            time.sleep(espera)
+            siguiente = min(proximo_saldos, proximo_fondos, proximo_ip)
+            if self.ver_historial:
+                siguiente = min(siguiente, proximo_hist)
+            self._parar.wait(min(0.5, max(0.0, siguiente - time.monotonic())))

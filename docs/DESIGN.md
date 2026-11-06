@@ -12,11 +12,15 @@ adaptado a escritorio.
 
 ## 1. No negociables
 
-- **Fuente única de tokens: `theme.py`.** Ningún color, fuente o radio fuera de ahí.
+- **Fuente única de tokens: `theme.py`.** No agregues colores, fuentes o radios ad hoc.
+  Los SVG de marca conservan sus colores propios y la barra DWM de Windows requiere valores
+  equivalentes en la llamada nativa.
 - **Todo en `Geist`.** Los números usan `theme.NUM`, que apunta a la misma familia.
   Se probó `Geist Mono` para tener cifras tabulares, pero es ~19 % más ancho; como los
   números van alineados a la derecha, el borde derecho queda fijo y no hace falta tabular.
-- **Sin decoración:** ni gradientes, ni sombras, ni emojis decorativos, ni animaciones.
+- **Sin decoración:** ni gradientes, sombras ni emojis decorativos. La única animación
+  funcional actual es el reordenamiento del deck (150 ms, `OutCubic`); no agregues movimiento
+  ornamental.
 - Todo número pasa por `theme.fmt_price / fmt_pnl / fmt_fee / fmt_usdt / fmt_qty / fmt_pct`.
 - Los errores de API se muestran; no se convierten en estados vacíos.
 
@@ -41,8 +45,8 @@ Semánticos:
 
 | Token | Valor | Uso |
 |---|---|---|
-| `GREEN` | `#1ECB81` | LONG, PnL positivo, fee negativa (rebate), conectado |
-| `RED` | `#F6465D` | SHORT, PnL negativo, fee positiva (costo), error |
+| `GREEN` | `#1ECB81` | LONG, PnL no negativo, conectado |
+| `RED` | `#F6465D` | SHORT, PnL negativo, costo, error |
 | `GOLD` | `#FFD60A` | DRY-RUN, advertencias |
 | `SELECT` | `#243044` | selección de texto en listbox |
 | `ACCENT_SOFT` | `#26405F` | segmento activo, preset activo, botón primario suave |
@@ -58,8 +62,10 @@ Semánticos:
 
 ## 3. Tipografía
 
-- `Geist` (regular/medium/semibold/bold) — registrada en el proceso con
-  `AddFontResourceExW` (FR_PRIVATE); no se instala en Windows.
+- `Geist` (regular/medium/semibold/bold) — se registra con `AddFontResourceExW` (FR_PRIVATE)
+  y, para que Qt/DirectWrite la encuentre, también con
+  `QFontDatabase.addApplicationFont` en `qt/style.py::cargar_fuentes()` antes de crear widgets.
+  No se instala en Windows.
 - `theme.NUM` = `Geist`. **No es tabular** (`1111` mide 28 px, `8888` 40 px), pero las
   columnas numéricas van alineadas a la derecha, así que el borde derecho no se mueve.
 - Fallback: la familia del sistema si Geist no está disponible.
@@ -90,9 +96,9 @@ tipografía.
   (ordenes: par con el % llenado debajo y TP/SL en dos lineas) y 38 px (historial).
   Cabecera: 36 px. Los altos están en `layout.py` (`ROW_H`, `ORDER_ROW_H`) y se usan tal cual:
   Qt ya trabaja en píxeles, no hay escala DPI que aplicar.
-- Ventana: **1800 × 1000** por defecto, mínimo **1760 × 860**. La fila de posiciones mide
-  **1622 px** (30 del checkbox + 1392 de columnas + 200 de acciones); con menos de 1760 la
-  tabla recorta la última columna en silencio (no hay scroll horizontal).
+- Ventana: tamaño inicial **1800 × 1000**; no se declara un tamaño mínimo. La fila de
+  posiciones suma **1622 px** (30 del checkbox + 1392 de columnas + 200 de acciones); al
+  reducir la ventana, la tabla puede recortar la última columna (no hay scroll horizontal).
 ---
 
 ## 5. Componentes
@@ -127,7 +133,7 @@ tipografía.
 | `Margin ratio` | `0.50%`; `GOLD` desde 20 %. La cabecera dice **Margin ratio**, no `Margen %` |
 | `Margen` | `500.69 USDT` bold + lápiz; la unidad va en el valor, no en la cabecera |
 | `PnL` | dos líneas: `-6.0976 USDT` en 13 bold y `ROE` (`-1.22%`) en `MUTED` 11 |
-| `Fee · %mrg / pos` | Total en 13 bold (color por signo) **con subrayado punteado**, `0.30% / 0.03%` en `MUTED` 11 (parte del margen y del nocional) y `ahorro 1.7489` en `GREEN` 11. El total es **comisión + funding** (`mexc.fee_desglose`): `totalFee` = comisión cobrada al abrir y `holdFee` = funding; `lowSaveTotalFee` es "Fees saved" y **no** suma. El subrayado punteado avisa que hay detalle: al pasar el puntero, `tooltip.NumeroConDetalle` abre un panel con `Comisión / Funding / Fee total / Fees saved`. Ojo: el terminal de MEXC pinta su "Fees" como `totalFee + lowSaveTotalFee`, así que allí el número es más alto |
+| `Fee · %mrg / pos` | Total en 13 bold, rojo si no es cero y gris si es cero, **con subrayado punteado**, `0.30% / 0.03%` en `MUTED` 11 (parte del margen y del nocional) y `ahorro 1.7489` en `GREEN` 11. El total es **comisión + funding** (`mexc.fee_desglose`): `totalFee` = comisión cobrada al abrir y `holdFee` = funding; `lowSaveTotalFee` es "Fees saved" y **no** suma. Al entrar a la celda, `qt/cells.py::Bocadillo` muestra un panel inmediato con `Comisión pagada / Funding cobrado / Fee pagada / Fees saved / próximo funding / costo estimado de cierre`. Ojo: el terminal de MEXC pinta su "Fees" como `totalFee + lowSaveTotalFee`, así que allí el número es más alto |
 | `TP / SL` | todo alineado a la derecha: `3,990.5 / 3,880.2`, o `TP 3,990.5`, o `SL 3,880.2`, o `—`; lápiz al final |
 
 La fila mide 56 px y cada celda queda centrada verticalmente sin tocar los bordes: las líneas
@@ -172,30 +178,31 @@ fila: se deduce del lápiz de margen, que aparece deshabilitado en cruzado.
 
 | Función | Salida | Uso |
 |---|---|---|
-| `fmt_price` | `78,549.5` / `2,239.10` / `0.90560` | resúmenes y precios de referencia; **no** en la fila |
-| `fmt_price_exact` | `3,900.75` | precios de la fila (Entrada, Mark price, Liquidación, mínimo 2 decimales) y precio de una orden límite: lo que se ve es lo que se envía |
+| `fmt_price` | `78,549.5` / `2,239.10` / `0.90560` | resúmenes, precios de referencia e historial |
+| `fmt_price_exact` | `3,900.75` | posiciones (Entrada, Mark price y Liquidación; respeta escala con mínimo 2 decimales), precios de órdenes límite y TP/SL: lo que se ve en órdenes es lo que se envía |
 | `fmt_pnl` | `+12.4021` / `-3.1502` | PnL, signo siempre, 4 decimales |
 | `fmt_fee` | `0.1997` | comisiones, 4 decimales |
 | `fmt_usdt` | `502.11` / `+502.11` | márgenes, nocional |
 | `fmt_qty` | `127` / `0.0134` | contratos y cantidades |
 | `fmt_pct` | `+1.24%` / `-3.92%` | variación 24h |
 | `fmt_share` | `0.20%` / `<0.01%` | parte de un total (fee sobre margen y nocional), sin signo |
-| `table.fmt_when` → `qt.view._cuando` | `30/10 12:11` | `createTime` (ms) de posiciones, órdenes e historial; fuera de `theme` porque es fecha, no número |
+| `qt.formato.cuando` | `30/10 12:11` | fecha de las celdas de posiciones, órdenes e historial; fuera de `theme` porque es fecha, no número |
 
 Reglas de color en tablas:
 
 | Celda | Regla |
 |---|---|
-| PnL | `> 0` verde · `< 0` rojo · `= 0` gris |
-| Fee | `> 0` rojo (costo) · `< 0` verde (rebate) · `= 0` gris |
+| PnL en Posiciones | `>= 0` verde · `< 0` rojo |
+| Fee en Posiciones | distinto de cero rojo · cero gris |
+| Fee en Historial | positivo rojo (costo) · cero o negativo gris |
 | Mark price | verde si va ganando vs entrada, rojo si perdiendo, gris si falta |
 | Lado | LONG verde · SHORT rojo |
 | Dirección (órdenes) | compra (lado 1, 2) verde · venta (lado 3, 4) rojo |
 | Llenado (órdenes) | algo llenado en `GOLD`, nada en `MUTED` |
 | Estado (órdenes) | `Sin llenar` / `Pendiente` en `TEXT`, el resto en `MUTED` |
-| Estado (historial) | Ejecutada verde · resto gris |
+| Estado (historial) | `Cerrada` verde · `Parcial` dorado · otros estados gris |
 
-**Estructura de la fila de órdenes abiertas** (54 px, `qt/view.py`, imita el panel de MEXC)
+**Estructura de la fila de órdenes abiertas** (54 px, `qt/tabla_ordenes.py`, imita el panel de MEXC)
 
 | Celda | Contenido |
 |---|---|
@@ -214,7 +221,8 @@ Reglas de color en tablas:
 
 Los tres lápices (Monto, Precio y TP/SL) abren el mismo **editor de orden**, como en MEXC.
 Las órdenes de cierre (lado 2/4) no se pueden reenviar: `Modificar` avisa que solo se puede
-cancelar. La tabla se repinta con el poller (cada 3 s).
+cancelar. Las condicionales TP/SL de BingX se muestran y se pueden cancelar, pero no tienen
+lápices ni acción `Modificar` desde esta pestaña. La tabla se actualiza con el poller (cada 3 s).
 
 **Editor de orden** (`qt.dialogs.EditorOrden`, 420 px de ancho)
 
@@ -234,7 +242,7 @@ cancelar. La tabla se repinta con el poller (cada 3 s).
 - Diálogos y buscador son `QDialog` con `FramelessWindowHint`, borde de 1 px (`LINE`) y
   esquina de tarjeta; se centran sobre la ventana padre y son modales.
 - Siempre llevan ✕ propia y responden a `Escape`; el diálogo responde a `Enter`.
-- El chip `Mercado ▾` y el `% ▾` de la fila abren un `QMenu` y, para el valor libre, el
+- Los chips `Mercado` y `%` de la fila abren un `QMenu` y, para el valor libre, el
   formulario propio. El precio y el porcentaje **no se guardan**: una límite vieja aplicada
   a un precio nuevo es peligrosa.
 - Nada de `QMessageBox` (queda gris y fuera del estilo).
@@ -258,13 +266,16 @@ cancelar. La tabla se repinta con el poller (cada 3 s).
 
 ## 8. Deuda visual conocida
 
-- La tabla se reconstruye completa en cada refresco (cada 3 s). Con muchas decenas de
-  posiciones conviene actualizar por fila o virtualizar.
 - El título de `Margen` y `TP / SL` no queda alineado con el valor: la celda reserva ~26 px
   al final para el lápiz y la cabecera no.
 - El scroll horizontal de tarjetas no responde a la rueda sin `Shift`.
-- El historial se pinta completo cada 15 s y el logo SVG de cada fila se renderiza de nuevo
-  (medido: ~120 ms con 153 operaciones). Plan: repintado incremental en `docs/PLAN.md` §6.3.
+- La tabla de Posiciones reconstruye sus filas en cada refresco (cada 3 s); si el volumen de
+  posiciones crece, evaluar actualización por fila. El Historial ya compara IDs y snapshots:
+  no repinta si nada cambió, actualiza o mueve solo las filas afectadas y conserva el scroll.
+  Los pixmaps de logos tienen caché (`qt/style.py::logo`, máximo 32 entradas). En una medición
+  local con 153 filas, el repintado completo equivalente fue ~167 ms y el caso sin cambios
+  ~0,13 ms; no son garantías de rendimiento ni incluyen red.
 - La fee es una estimación: MEXC devuelve `takerFeeRate` distinto entre llamadas.
-- Los tests automáticos no abren ventanas (Qt + Python 3.14 revienta al cerrar): los
-  widgets se revisan con `tools/smoke_live.py` y capturas.
+- Los tests automáticos actuales no crean ventanas reales; los widgets se revisan con
+  `tools/smoke_live.py` y capturas. Si se agregan pruebas GUI, verificar el ciclo de vida Qt
+  en Windows/Python 3.14: se observó un fallo al cerrar una ventana en ese entorno.

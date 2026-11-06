@@ -3,6 +3,8 @@
 Nada de colores literales: si falta un token, se agrega en `theme.py`.
 """
 
+from functools import lru_cache
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
@@ -204,12 +206,13 @@ QToolTip {{
 """
 
 
+@lru_cache(maxsize=32)
 def logo(nombre, alto=22, completo=False):
     """Pixmap del logo del broker a la altura pedida.
 
     `completo=True` usa el wordmark (`<nombre>_full.svg`, marca + nombre) y si no
-    la marca sola; los colores ya vienen normalizados porque Qt no lee variables
-    CSS en los SVG.
+    la marca sola; queda cacheado porque Qt no lee variables CSS en los SVG y se
+    repite el mismo wordmark en cada fila del historial y posiciones.
     """
     from PySide6.QtGui import QPainter, QPixmap
     from PySide6.QtSvg import QSvgRenderer

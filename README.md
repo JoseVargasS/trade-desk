@@ -45,11 +45,12 @@ La app muestra tu IP arriba a la derecha, con botón para copiarla.
 - **TP / SL**: opcionales. Vacíos = entra sin ellos. Ojo: la dirección se mide contra el
   **precio actual**, no contra la entrada. Un SL puesto del lado de la ganancia (por encima
   del precio en un LONG) no es un stop loss: la app lo guarda como **TP** y te avisa.
-- **Resumen** en cada tarjeta: contratos, nocional real, fee estimada y liquidación
-  estimada (long / short, solo en margen aislado). En Bitunix se muestran monedas y nocional;
-  en BingX el resumen todavía no se calcula (ver `docs/PLAN.md`).
-- **DRY-RUN** viene **activado**: no abre ni cierra posiciones. El **TP/SL**, el **margen**,
+- **Resumen** en cada tarjeta: MEXC muestra contratos, nocional, fee y liquidación estimada
+  (long / short, solo en margen aislado); Bitunix muestra monedas y nocional; BingX muestra
+  monedas, nocional y fee estimada.
+- **DRY-RUN** viene **activado**: no abre, cierra ni revierte posiciones. El **TP/SL**, el **margen**,
   el **BE** y **cancelar órdenes** sí funcionan, porque son gestión de riesgo.
+  **Modificar una orden queda bloqueado**: implica reenviarla.
   El checkbox `DRY-RUN` de la cabecera pasa a `REAL` en rojo cuando lo apagas.
 - **Buscar par**: `+ Añadir par` abre una ventana flotante. Escribes, `Enter` toma el
   primer resultado (los pares USDT van primero), `Esc` cierra.
@@ -82,12 +83,17 @@ el broker, lado, **tamaño en USDT**, entrada, salida, PnL, fee, **neto** y esta
 pide la página siguiente de cada broker. Lo que el exchange ya purgó sigue apareciendo: se archiva
 en `operaciones.json`.
 
+El historial solo actualiza las filas que cambiaron, inserta o reordena las necesarias y conserva
+el scroll. En Órdenes, las condicionales TP/SL de BingX se muestran y se pueden cancelar, pero no
+se editan desde esa pestaña.
+
 ## Seguridad
 
 - La key no puede retirar fondos.
 - Cada orden de apertura lleva un `externalOid` único. Ojo: **no** hay reintento automático, así
   que si un envío queda en duda (timeout) hay que mirar Posiciones antes de reenviar.
-- Nada corre en segundo plano. Cierras la ventana y no queda nada vivo.
+- Mientras la ventana está abierta, workers separados actualizan precios y datos de cuenta.
+  Al cerrar la app, esos workers se detienen; no queda un servicio corriendo.
 - Las posiciones y los TP/SL viven en el exchange, no en tu PC.
 - `trades.log` guarda cada intento (hora, resultado, `orderId`, símbolo, `vol`), nunca la key.
 
@@ -123,7 +129,7 @@ src/tradedesk/          la app
   paths.py              dónde viven los datos y los assets
   qt/                   ventana, tarjetas, diálogos, estilos y buscador (PySide6)
   assets/               iconos y fuentes Geist
-tests/                  pruebas (pytest): 141
+tests/                  pruebas (pytest): 181 recopiladas
 tools/                  utilidades: icono, chequeos contra la API y la cuenta
 docs/DESIGN.md          sistema de diseño
 docs/PLAN.md            plan de trabajo vivo (fases, estado y bitácora)

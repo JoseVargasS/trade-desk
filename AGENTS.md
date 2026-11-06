@@ -21,7 +21,7 @@ el acceso directo, o la app deja de abrir con doble clic.
 
 ```powershell
 pip install -e ".[dev]"     # deps de la app + pytest/ruff/pre-commit
-python -m pytest            # 141 tests (~14 s): logica pura, payloads y parseo
+python -m pytest            # 181 tests recopilados (verifica la cuenta actual antes de citarla)
 python -m ruff check .      # lint
 python -m ruff format .     # formato (obligatorio: CI corre --check)
 scripts\check.bat           # lint + formato + tests de una
@@ -69,8 +69,9 @@ documento (AGENTS) describe cómo está el código **hoy**, no cómo debería es
 
 ## 1. Qué es y por qué existe
 
-App de escritorio Windows para operar **futuros de MEXC a mercado** (solo market orders).
-No es un bot: no hay estrategias, ni trailing, ni nada automático. Es una mesa de ejecución.
+App de escritorio Windows para operar **futuros de MEXC, Bitunix y BingX**, a mercado por
+defecto y con límite opcional. No es un bot: no hay estrategias, trailing ni ejecución
+automática. Es una mesa de ejecución.
 
 **Contexto de origen.** El usuario operaba en el terminal web de MEXC (BTC + ETH en pestañas
 separadas). El navegador llegaba a ~3.4 GB en RAM y 85 % de CPU por la consola de DevTools
@@ -95,11 +96,12 @@ Decisiones de fondo que **no** están en discusión:
 3. Configura apalancamiento (entry o presets 1/5/10/15/20/50), margen (Aislado por defecto),
    modo de tamaño (Margen o Nocional) y escribe el **tamaño en USDT** (vacío por defecto).
 4. Opcional: TP y SL.
-5. Mira el resumen de la tarjeta: contratos, nocional real, fee estimada, liquidación L/S.
+5. Mira el resumen de la tarjeta: MEXC muestra contratos, nocional, fee y liquidación
+   estimadas; Bitunix muestra monedas y nocional; BingX muestra monedas, nocional y fee.
 6. `LONG` o `SHORT` → diálogo de confirmación → orden a mercado. El chip `Mercado ▾`
    de la tarjeta (al lado de *Tamaño*) permite abrir **a límite**: escribe el precio y
    la orden sale `type=1`; sin tocarlo sigue saliendo a mercado.
-7. Abajo, pestaña **Posiciones**: cada fila trae `[Mercado ▾]`, `[% ▾]` y el botón
+7. Abajo, pestaña **Posiciones**: cada fila trae `[Mercado]`, `[%]` y el botón
    `Cerrar LONG` / `Cerrar SHORT` (del color del PnL). Sin tocar nada cierra **a mercado y
    al 100 %**, con el mismo diálogo de siempre; un precio en el primer campo la vuelve orden
    **límite** (puede quedar sin llenar) y el `%` permite cerrar una parte. También:
@@ -116,8 +118,10 @@ Decisiones de fondo que **no** están en discusión:
    Los **lápices** de Monto, Precio y TP/SL abren el editor (lado, apalancamiento, margen,
    precio, TP y SL); en la columna de acciones están `Modificar` y `Cancelar`, y arriba a la
    derecha `Cancelar todo`. Una orden límite no aparece en Posiciones hasta que se llena.
+   Las condicionales TP/SL de BingX se muestran y pueden cancelarse, pero no ofrecen lápiz
+   ni `Modificar` desde esta pestaña.
 9. Pestaña **Historial**: las últimas órdenes de los **tres** brokers, **agrupadas en
-   operaciones** (una fila por posición, no por orden): hora de apertura y de cierre, par
+   operaciones** (una fila por operación, no por orden): hora de apertura y de cierre, par
    con el wordmark del broker, lado, **tamaño en USDT**, entrada, salida, PnL, fee, **neto**
    (PnL − fee) y estado (`Cerrada` / `Parcial` / `Abierta`). Los cierres parciales se suman
    en la misma fila en vez de aparecer sueltos.
@@ -134,54 +138,57 @@ es abrir.
 ```
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
-  src/tradedesk/            (7.531 lineas en total)
-    __main__.py             arranque: AppUserModelID + vista Qt           20
-    paths.py                DATA_DIR (raiz) y ASSETS (paquete)            13
-    creds.py                Windows Credential Manager                    24
-    brokers.py              nombres y titulos de los brokers               9
-    theme.py                color, tipografia, radios, formatos          118
-    layout.py               anchos/altos de las tablas (sin UI)           64
-    pairs.py                filtro puro del buscador de pares             48
-    forms.py                parseo puro de tarjeta y editor de orden      80
-    pnl.py                  neto de una operacion del historial           12
-    archivo.py              operaciones guardadas en disco (upsert)       63
-    operaciones.py          empareja ordenes en operaciones (historial)  246
-    session.py              pollers, cola, config y caches sin UI        543
-    controller.py           casos de uso: abrir, cerrar, TP/SL, ordenes  655
-    mexc.py                 firma, endpoints, USDT->contratos, fee, liq   654
-    bitunix.py              firma, endpoints, monedas (qty), specs        633
-    bingx.py                firma, endpoints, monedas (qty), specs        670
+  src/tradedesk/            (6.983 líneas Python; conteo de referencia al 2026-11-06)
+    __init__.py              inicialización del paquete                      2
+    __main__.py              arranque: AppUserModelID + vista Qt            14
+    paths.py                 DATA_DIR (raíz) y ASSETS (paquete)             10
+    creds.py                 Windows Credential Manager                    16
+    brokers.py               nombres y títulos de los brokers                6
+    theme.py                 color, tipografía, radios, formatos            88
+    layout.py                anchos/altos de las tablas (sin UI)             56
+    pairs.py                 filtro puro del buscador de pares               36
+    forms.py                 parseo puro de tarjeta y editor de orden       100
+    pnl.py                   neto de una operación del historial              9
+    archivo.py               operaciones guardadas en disco (upsert)        134
+    operaciones.py           empareja órdenes en operaciones (historial)    213
+    session.py               pollers, cola, config y caches sin UI          577
+    controller.py            casos de uso: abrir, cerrar, TP/SL, órdenes   654
+    mexc.py                  firma, endpoints, USDT->contratos, fee, liq    568
+    bitunix.py               firma, endpoints, monedas (qty), specs        564
+    bingx.py                 firma, endpoints, monedas (qty), specs        610
     assets/                 icon.ico, icon.png, fonts/*.ttf
     qt/
-      __main__.py           abre la ventana                                 38
-      view.py               fachada: reexporta VistaQt (9)
-      ventana.py            cabecera, deck arrastrable, pestanas, drenaje  590
-      tabla_posiciones.py   filas, resumen bruto/neto, globo de la fee     332
-      tabla_ordenes.py      ordenes abiertas (panel estilo MEXC)           122
-      tabla_historial.py    una fila por operacion, con su neto             97
-      tarjeta.py            tarjeta de par                                 383
-      cierre.py             barra de cierre de la fila (slider, botones)   371
-      dialogs.py            fachada: reexporta los dialogos                 43
-      dialogos_base.py      Modal, confirm, show, form y claves            343
-      editor_orden.py       editor de una orden abierta                    167
-      tpsl.py               editor de TP/SL con las lineas vivas            81
-      be.py                 ventana de "Poner a BE"                        125
-      panel_brokers.py      panel de brokers                                60
-      port.py               UiPort de la vista Qt                           50
-      formato.py            fecha y tamano en USDT de las celdas            26
-      style.py              fnt, etiqueta, boton, Segmentado, qss          258
-      cells.py              delegado, celdas con lapiz, spinner, bocadillo 339
-      search.py             buscador de pares                               88
-      shell.py              ventana de prueba para medir repintado        152
-  tests/                    pytest (141 tests): logica pura, payloads y parseo
+      __init__.py           inicialización del paquete                       0
+      __main__.py           abre la ventana                                 31
+      view.py               fachada: reexporta VistaQt                       6
+      ventana.py            cabecera, deck arrastrable, pestañas, drenaje   540
+      tabla_posiciones.py   filas, resumen bruto/neto, globo de la fee     306
+      tabla_ordenes.py      órdenes abiertas (panel estilo MEXC)           115
+      tabla_historial.py    una fila por operación, con su neto            138
+      tarjeta.py            tarjeta de par                                 349
+      cierre.py             barra de cierre de la fila (slider, botones)   328
+      dialogs.py            fachada: reexporta los diálogos                 40
+      dialogos_base.py      Modal, confirm, show, form y claves            296
+      editor_orden.py       editor de una orden abierta                    153
+      tpsl.py               editor de TP/SL con las líneas vivas            73
+      be.py                 ventana de "Poner a BE"                        111
+      panel_brokers.py      panel de brokers                                52
+      port.py               UiPort de la vista Qt                           39
+      formato.py            fecha y tamaño en USDT de las celdas            19
+      style.py              fuentes, widgets, QSS y logos                  229
+      cells.py              delegado, celdas con lápiz, spinner, bocadillo 295
+      search.py             buscador de pares                               72
+      shell.py              ventana de prueba para medir repintado        134
+  tests/                    pytest (181 tests recopilados): lógica, payloads y UI fake
   tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
   scripts/check.bat         lint + formato + tests
   docs/DESIGN.md            sistema de diseno
   docs/PLAN.md              plan de trabajo vivo (fases, estado, bitacora)
 ```
 
-**Ningún archivo pasa de ~700 líneas.** El más grande del proyecto es `bingx.py` (670) y el
-mayor de la interfaz es `ventana.py` (590). `qt/view.py` y `qt/dialogs.py` quedaron como
+**El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.** Al último conteo
+ningún módulo supera el objetivo: los más grandes son `controller.py` (654) y `bingx.py`
+(610); el mayor de la interfaz es `ventana.py` (540). `qt/view.py` y `qt/dialogs.py` quedaron como
 **fachadas** que reexportan: así los imports de `__main__.py`, `tools/smoke_live.py` y de la
 propia vista no cambiaron. Si un archivo se acerca al tope, se parte igual: módulo nuevo +
 fachada, sin tocar los call sites.
@@ -193,17 +200,25 @@ recordá que el método vive en el mixin, no en `ventana.py`.
 ### Flujo de datos
 
 Todo pasa por **una cola** (`session.q`) y un solo consumidor en el hilo de la UI
-(`VistaQt._drenar`, cada 120 ms). Ningún hilo toca widgets.
+(`VistaQt._drenar`, cada 120 ms). Ningún worker toca widgets ni abre diálogos. Las consultas
+de red y los resultados de acciones publican mensajes; la UI los procesa en `_drenar`.
 
 ```
-hilo _poll      ──►  q.put(("ticker", ...))      precio por tarjeta, round-robin
-                ──►  q.put(("positions", ...))   cada 3 s
-                ──►  q.put(("orders", ...))      órdenes abiertas, cada 3 s
-                ──►  q.put(("history", ...))     cada 15 s, solo en su pestaña
-hilo catálogo   ──►  q.put(("markets", ...))     1.171 pares del buscador
-hilo ip         ──►  q.put(("ip", ...))          IP pública para la cabecera
-hilo orden      ──►  q.put(("order", ...))       resultado de la orden
+_cargar_tarjetas ─► contratos/precios iniciales y saldos
+_cargar_catalogo ─► ("markets", ...)              catálogo MEXC + pares extra Bitunix
+_cargar_ip       ─► ("ip", ...)                   IP inicial
+_poll            ─► ("ticker", ...)               1 tarjeta por vuelta; 0,70 s entre requests
+_poll_cuenta     ─► ("positions", ...), ("orders", ...) cada 3 s en estado normal
+_poll_secundario ─► historial (15 s, solo en su pestaña), saldos (15 s),
+                    funding (60 s) e IP (900 s); tareas secuenciales en este worker
 ```
+
+El ticker, la cuenta y las tareas secundarias usan workers distintos: una petición lenta en
+uno no detiene los otros. Dentro de `_poll_cuenta`, posiciones y órdenes se consultan en
+secuencia; dentro de `_poll_secundario`, historial, saldos, funding e IP también. Ticker y
+cuenta aplican backoff si fallan (tope de 5 s). No describas al worker secundario como cuatro
+hilos separados. `Session.start()` conserva las referencias a los workers daemon; `stop()`
+señala el evento de cierre.
 
 `controller.Control` recibe `session` y un `UiPort` (`qt.dialogs.QtPort`) con
 `confirm`, `show`, `form`, `tpsl`, `editar_orden` y `status`. La UI solo pinta y lee
@@ -212,20 +227,21 @@ los controles; los casos de uso y los payloads viven en el controlador.
 ### Persistencia
 
 `config.json` (ignorado por git) guarda **solo** `symbol`, `leverage`, `margin`, `size_mode`
-y `exchange` por tarjeta. **No** guarda tamaño, TP, SL ni DRY-RUN (ver §7). Ojo: hoy se escribe
-con `write_text`, **sin** atomicidad (un corte a mitad lo deja truncado y la app arranca sin
-tarjetas, en silencio): está en `docs/PLAN.md` §3.1.
+y `exchange` por tarjeta. **No** guarda tamaño, TP, SL ni DRY-RUN (ver §7). Se escribe primero
+a un archivo temporal y se reemplaza con `os.replace`; si falla, el error queda en el log y
+se publica en la barra de estado.
 
 `operaciones.json` (también ignorado) es el **archivo de operaciones**: cada operación
 cerrada se guarda con una clave estable (`_clave`) y se actualiza en sitio (un parcial que
 después se cierra, o una fee que se ajusta). Existe porque los exchanges purgan su
-historial (~3 meses): sin esto, lo viejo desaparece de la pestaña. Se escribe de forma
-atómica (tmp + `os.replace`) y al arrancar se pinta lo guardado antes de tocar la red.
-**No** hay respaldo todavía, y un JSON corrupto se ignora en silencio y se sobrescribe con lo
-nuevo (`docs/PLAN.md` §3.2 y §3.3).
+historial (~3 meses): sin esto, lo viejo desaparece de la pestaña. Antes de guardar se crea
+`operaciones.json.bak` y el archivo principal se reemplaza atómicamente. Si el JSON está
+corrupto, se pone en cuarentena y se intenta recuperar el respaldo; la vista recibe un aviso
+explícito. Al arrancar se pinta lo guardado antes de tocar la red (`docs/PLAN.md` §3.2 y §3.3).
 
 `trades.log` registra cada intento: hora, resultado, `orderId`, símbolo, `vol`. Nunca la key.
-No rota (§3.4 del plan).
+Rota al alcanzar 1 MB y conserva hasta tres copias; los errores de escritura se notifican
+(§3.4 del plan).
 
 ---
 
@@ -312,7 +328,7 @@ distintos entre llamadas (se observó `0.0002` y `0.0004` en la misma sesión). 
 La columna Fee de posiciones muestra **comisión + funding** (`mexc.fee_desglose`):
 `totalFee` es la comisión ya cobrada al abrir y `holdFee` el funding; `lowSaveTotalFee` es
 "Fees saved" y **no** suma. El importe lleva subrayado punteado y al pasar el puntero aparece
-el desglose (`qt/cells.py`: subrayado punteado + `Qt.ToolTipRole` con `QToolTip`). Ojo: el terminal de MEXC pinta su "Fees" como
+el desglose en el `Bocadillo` propio (`qt/cells.py`), no en un `QToolTip` nativo. Ojo: el terminal de MEXC pinta su "Fees" como
 `totalFee + lowSaveTotalFee`, así que su número es más alto que el real.
 
 ### Bitunix (segundo broker)
@@ -497,8 +513,10 @@ cantidad exactos de lo que abrió el script.
 
 ## 6. Reglas de UI (resumen; el detalle está en `docs/DESIGN.md`)
 
-- Tokens **solo** en `theme.py`. Ningún color o fuente literal en otro archivo; el QSS sale de
-  `qt/style.py::qss()`.
+- Los tokens de color, tipografía, radio y formato numérico viven en `theme.py`; la vista los
+  consume desde ahí y el QSS se arma en `qt/style.py::qss()`. No agregues colores/fuentes ad hoc.
+  Excepciones delimitadas: colores de marca ya incrustados en assets SVG y los valores
+  equivalentes que requiere la API de la barra DWM de Windows.
 - UI en `Geist`, **todo número en `theme.NUM`**, que es la misma familia (proporcional,
   no tabular): las columnas van alineadas a la derecha, así que el borde derecho no se mueve.
   Se probó `Geist Mono` y se descartó por ~19 % más ancha. Se registran en el proceso con
@@ -509,7 +527,7 @@ cantidad exactos de lo que abrió el script.
 - Todo número se formatea con `theme.fmt_*`. PnL y fee con 4 decimales; precios de orden
   límite con `fmt_price_exact` (`priceScale` del contrato).
 - La fila de posiciones no crece: la barra de cierre va en dos líneas dentro de los 200 px
-  de la columna de acciones (`[Mercado ▾][100% ▾]` / `[Cerrar LONG][Reverse]`).
+  de la columna de acciones (`[Mercado][100%]` / `[Cerrar LONG][Reverse]`).
 - Nada de `QMessageBox` ni de messagebox clásico: usar `qt.dialogs.confirm` / `show` /
   `ask_key` / `form` (QDialog sin marco, borde de 1 px, `Esc` cancela y `Enter` acepta).
 - **Ningún worker toca widgets.** Los hilos solo hacen `q.put`; el hilo de la UI pinta.
@@ -751,7 +769,7 @@ los avisos se encolan fuera del drain (§6).
 python app.py                 # lanzador del acceso directo, con consola para ver errores
 python -m tradedesk           # lo mismo, con PYTHONPATH=src
 python -m tradedesk.qt        # abre la vista Qt directamente
-python -m pytest              # 141 tests: logica pura, payloads y parseo
+python -m pytest              # 181 tests: logica pura, payloads, parseo y workers
 python -m ruff check .        # lint
 python -m ruff format --check .   # formato (lo que corre el CI)
 scripts\check.bat             # las tres cosas juntas
@@ -770,18 +788,19 @@ python tools/qt_probe.py      # ms de repintado (objetivo <= 60)
 | `layout.py` (anchos de tabla) | `python -m pytest tests/test_layout.py` |
 | `mexc.py` (payload, `vol`, precio, fee) | `python -m pytest tests/test_mexc_orders.py tests/test_mexc_pure.py` |
 | `controller.py` (hilos, cola, cierre, TP/SL, órdenes) | `python -m pytest tests/test_no_threaded_widgets.py tests/test_actions_close.py tests/test_mexc_orders.py` |
-| `session.py` (pollers, config, catálogo) | `python -m pytest tests/test_paths.py` + `python tools/smoke_live.py 9` |
+| `session.py` (pollers, config, catálogo) | `python -m pytest tests/test_session_polling.py tests/test_paths.py` + `python tools/smoke_live.py 9` |
 | `forms.py` (parseo de tarjeta/editor) | `python -m pytest tests/test_forms.py` |
 | `pairs.py`, `qt/search.py` (buscador) | `python -m pytest tests/test_search.py` |
 | `pnl.py` (neto del historial) | `python -m pytest tests/test_pnl.py` |
-| `qt/ventana.py`, `qt/tabla_*.py`, `qt/cierre.py`, `qt/dialogos_base.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
+| `qt/tabla_historial.py` (actualización incremental) | `python -m pytest tests/test_history_render.py` |
+| `qt/ventana.py`, otras `qt/tabla_*.py`, `qt/cierre.py`, `qt/dialogos_base.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
 | `__main__.py`, `app.py` (arranque) | `python -m pytest tests/test_launcher.py` |
 | docs, comentarios, README | nada |
 
-Si el cambio es de texto, formato o color: **captura** y listo, sin tests. Si dudas de qué
-test cubre algo, preguntar antes de correr la suite entera. Los widgets Qt se verifican con
-captura: los tests no abren ventanas (crear/destruir Qt en la misma corrida de pytest revienta
-en Windows con Python 3.14).
+Si el cambio es de texto, formato o color: **captura** y listo, sin tests. Si dudas de qué test cubre algo, preguntar antes de correr la suite entera. Los tests actuales
+no crean ventanas reales; los widgets Qt se verifican con captura. Si agregas pruebas GUI,
+valida el ciclo de vida Qt en Windows/Python 3.14: se observó un fallo al cerrar una ventana
+en ese entorno.
 
 Antes de entregar un cambio:
 
@@ -802,7 +821,7 @@ cerrar todas, DRY-RUN, historial, búsqueda, conversión de tamaño, **abrir una
 en la pestaña Órdenes, cancelarla y modificarla** (crear → listar → cancelar → editar y
 reenviar, todo probado contra la cuenta con órdenes de prueba a mitad de precio).
 
-**Migración a Qt terminada (F1–F6):**
+**Migración a Qt terminada:**
 
 - `python app.py` y el acceso directo abren la **vista Qt**; `python -m tradedesk.qt` hace lo
   mismo. La app de Tkinter y sus módulos (`app.py` del paquete, `ui.py`, `cards.py`,
@@ -811,9 +830,12 @@ reenviar, todo probado contra la cuenta con órdenes de prueba a mitad de precio
 - `session.py` carga config/catálogo, pollers y caches. `controller.py` tiene los casos de uso
   (abrir, cerrar, cerrar todo, reverse, TP/SL, margen, modificar/cancelar) y `qt/port.py`
   implementa el `UiPort`. Los payloads y mensajes son los mismos de antes.
-- La vista Qt ya opera: LONG/SHORT, barra de cierre con `Mercado ▾` / `% ▾`, checkboxes +
+- La vista Qt ya opera: LONG/SHORT, barra de cierre con `Mercado` / `%`, checkboxes +
   `Cerrar seleccionadas`, `CERRAR TODO`, `Reverse`, lápices de TP/SL y margen, editor de
   órdenes, `Cancelar todo`, buscador, historial, IP copiable y DRY-RUN siempre encendido.
+- El Historial se actualiza incrementalmente y conserva el scroll; sus logos se cachean.
+  Los workers de ticker, cuenta y tareas secundarias son independientes, aunque las tareas
+  auxiliares son secuenciales dentro de su worker.
 - Medido con `tools/qt_probe.py` (8 tarjetas y 200 filas): **~50 ms** al restaurar contra
   **943 ms** del caso equivalente en Tk.
 
