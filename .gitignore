@@ -16,5 +16,6 @@ dist/
 *.egg-info/
 .codegraph/
 operaciones.json
+operaciones.json.bak
 
 .tmp/
