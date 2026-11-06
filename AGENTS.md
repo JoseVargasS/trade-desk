@@ -64,7 +64,7 @@ documento (AGENTS) describe cómo está el código **hoy**, no cómo debería es
 - **El formato lo valida un hook**: `scripts/commit-msg` se copia a `.git/hooks/commit-msg`
   (`Copy-Item scripts\commit-msg .git\hooks\commit-msg`). Rechaza los mensajes sin tipo
   válido o con descripción de más de 72 caracteres.
-- **Solo commits y push directo a `master`.** El usuario es el único que maneja el repo: no se
+- **Solo commits y push directo a `main`.** El usuario es el único que maneja el repo: no se
   abren pull requests ni se activa Dependabot, porque ensucian el historial con merges. Las
   actions se actualizan a mano en el mismo commit.
 
