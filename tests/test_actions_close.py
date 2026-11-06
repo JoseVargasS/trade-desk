@@ -1,6 +1,7 @@
 """Glue del cierre: porcentaje -> contratos -> orden. Sin Tk y sin red."""
 
 import queue
+import threading
 import types
 
 import httpx
@@ -26,15 +27,16 @@ class FakeSession:
         self.q = queue.Queue()
         self.precios = {}
         self.avisos = []
+        self.refrescos = []
 
     def log(self, msg):
         pass
 
     def refresh_positions(self):
-        pass
+        self.refrescos.append("positions")
 
     def refresh_orders(self):
-        pass
+        self.refrescos.append("orders")
 
     def contract_for(self, symbol):
         return {}
@@ -79,6 +81,10 @@ def app(mx, monkeypatch):
     monkeypatch.setattr(controller, "threading", types.SimpleNamespace(Thread=InlineThread))
     ctl = _control(mx)
     ctl.port.avisos = []
+    ctl.verificaciones = []
+    ctl._iniciar_verificacion = lambda accion, comprobar: ctl.verificaciones.append(
+        (accion, comprobar)
+    )
     return ctl
 
 
@@ -129,6 +135,332 @@ def test_cancelar_la_confirmacion_no_envia(mx, posicion, monkeypatch):
     ctl.cerrar(posicion)
 
     assert ctl.mx.sent == []
+
+
+def test_timeout_al_abrir_avisa_resultado_desconocido_y_refresca(app):
+    llamadas = []
+
+    def timeout(*_args):
+        llamadas.append(True)
+        raise httpx.ReadTimeout("timeout")
+
+    app.mx.open_market = timeout
+    app._do_abrir(
+        "LONG",
+        {
+            "symbol": "XAU_USDT",
+            "notional": 100,
+            "lev": 1,
+            "open_type": 1,
+            "tp": None,
+            "sl": None,
+            "price": None,
+        },
+        False,
+    )
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert len(llamadas) == 1
+    assert app.session.refrescos == ["positions", "orders"]
+    assert any("resultado es desconocido" in str(m).lower() for m in mensajes)
+    assert app.verificaciones[0][0] == "apertura"
+
+
+def test_timeout_al_cerrar_avisa_y_refresca_sin_reintentar(app, posicion):
+    llamadas = []
+
+    def timeout(*_args):
+        llamadas.append(True)
+        raise httpx.ReadTimeout("timeout")
+
+    app.mx.close_position = timeout
+    app._do_cerrar([posicion])
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert len(llamadas) == 1
+    assert app.session.refrescos == ["positions", "orders"]
+    assert any(m[0] == "status" and "resultado es desconocido" in m[1].lower() for m in mensajes)
+    assert app.verificaciones[0][0] == "cierre"
+
+
+def test_timeout_en_reverse_avisa_y_refresca_sin_reintentar(app, posicion):
+    llamadas = []
+
+    def timeout(*_args):
+        llamadas.append(True)
+        raise httpx.ReadTimeout("timeout")
+
+    app.mx.reverse = timeout
+    app.reverse(posicion)
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert len(llamadas) == 1
+    assert app.session.refrescos == ["orders", "positions"]
+    assert any(m[0] == "status" and "resultado es desconocido" in m[1].lower() for m in mensajes)
+    assert app.verificaciones[0][0] == "reverse"
+
+
+def test_timeout_al_cerrar_todo_avisa_y_refresca_sin_reintentar(app):
+    llamadas = []
+
+    def timeout():
+        llamadas.append(True)
+        raise httpx.ReadTimeout("timeout")
+
+    app.mx.close_all = timeout
+    app.mx.positions = lambda: []
+    app._brokers = lambda: [("mexc", app.mx)]
+    app.cerrar_todo(1)
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert len(llamadas) == 1
+    assert app.session.refrescos == ["positions", "orders"]
+    assert any(m[0] == "closed" and "resultado es desconocido" in m[1].lower() for m in mensajes)
+    assert app.verificaciones[0][0] == "cierre total en mexc"
+    assert app.verificaciones[0][1]()
+
+
+def test_timeout_en_tpsl_avisa_y_refresca_sin_reintentar(app, posicion):
+    llamadas = []
+
+    def timeout(*_args, **_kwargs):
+        llamadas.append(True)
+        raise httpx.ReadTimeout("timeout")
+
+    app.mx.price = lambda _symbol: 3900.0
+    app.mx.tpsl_list = timeout
+    app._tpsl_worker(posicion, None, 3800.0)
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert len(llamadas) == 1
+    assert app.session.refrescos == ["orders", "positions"]
+    assert any(
+        m[0] == "status" and "verifica posiciones y órdenes" in m[1].lower() for m in mensajes
+    )
+    assert app.mx.sent == []
+    assert app.verificaciones[0][0] == "cambio de TP/SL"
+
+
+def test_timeout_en_break_even_avisa_y_refresca_sin_reintentar(app, posicion):
+    llamadas = []
+
+    def timeout(*_args, **_kwargs):
+        llamadas.append(True)
+        raise httpx.ReadTimeout("timeout")
+
+    app.mx.price = lambda _symbol: 3900.0
+    app.mx.tpsl_list = timeout
+    app._fila_be = lambda _pos: {"be": 3100.0}
+    app._be_worker([posicion], {str(posicion["positionId"])})
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert len(llamadas) == 1
+    assert app.session.refrescos == ["orders", "positions"]
+    assert any(
+        m[0] == "status" and "verifica posiciones y órdenes" in m[1].lower() for m in mensajes
+    )
+    assert app.verificaciones[0][0] == "TP/SL de GOLD(XAU)USDT"
+
+
+def test_verificacion_confirma_apertura_por_el_cambio_de_posicion(app):
+    app.session.ultimas_posiciones = []
+    app.mx.open_market = lambda *_args: (_ for _ in ()).throw(httpx.ReadTimeout("timeout"))
+    app.mx.positions = lambda: [{"symbol": "BTC_USDT", "positionType": 1, "holdVol": 2}]
+
+    app._do_abrir("LONG", _form_abrir(), False)
+
+    accion, comprobar = app.verificaciones[0]
+    assert accion == "apertura"
+    assert comprobar()
+
+
+def test_verificacion_confirma_orden_limite_abierta(app):
+    app.mx.open_market = lambda *_args: (_ for _ in ()).throw(httpx.ReadTimeout("timeout"))
+    app.mx.open_orders = lambda: [
+        {"symbol": "BTC_USDT", "orderId": "new", "side": 1, "price": 100, "type": 1}
+    ]
+
+    app._do_abrir("LONG", dict(_form_abrir(), price=100), False)
+
+    accion, comprobar = app.verificaciones[0]
+    assert accion == "apertura"
+    assert comprobar()
+
+
+def test_verificacion_confirma_cierre_si_la_posicion_ya_no_esta(app, posicion):
+    app.mx.close_position = lambda *_args: (_ for _ in ()).throw(httpx.ReadTimeout("timeout"))
+    app.mx.positions = lambda: []
+
+    app._do_cerrar([posicion])
+
+    accion, comprobar = app.verificaciones[0]
+    assert accion == "cierre"
+    assert comprobar()
+
+
+def test_verificacion_confirma_cierre_limite_por_orden_nueva(app, posicion):
+    app.mx.close_position = lambda *_args: (_ for _ in ()).throw(httpx.ReadTimeout("timeout"))
+    app.mx.open_orders = lambda: [
+        {"symbol": "XAU_USDT", "orderId": "new", "side": 4, "price": 105, "type": 1}
+    ]
+
+    app._do_cerrar([posicion], vol=5, price=105)
+
+    accion, comprobar = app.verificaciones[0]
+    assert accion == "cierre"
+    assert comprobar()
+
+
+def test_verificacion_confirma_reverse_solo_si_abre_el_lado_contrario(app, posicion):
+    app.mx.reverse = lambda *_args: (_ for _ in ()).throw(httpx.ReadTimeout("timeout"))
+    app.mx.positions = lambda: [{"symbol": "XAU_USDT", "positionType": 2, "holdVol": 22}]
+
+    app.reverse(posicion)
+
+    accion, comprobar = app.verificaciones[0]
+    assert accion == "reverse"
+    assert comprobar()
+
+
+def test_verificacion_no_confirma_reverse_si_solo_se_cerro(app, posicion):
+    app.mx.reverse = lambda *_args: (_ for _ in ()).throw(httpx.ReadTimeout("timeout"))
+    app.mx.positions = lambda: []
+
+    app.reverse(posicion)
+
+    accion, comprobar = app.verificaciones[0]
+    assert accion == "reverse"
+    assert not comprobar()
+
+
+def test_verificacion_confirma_tpsl_con_los_niveles_del_broker(app, posicion):
+    llamadas = 0
+
+    def stops():
+        nonlocal llamadas
+        llamadas += 1
+        if llamadas == 1:
+            raise httpx.ReadTimeout("timeout")
+        return [{"positionId": 1, "stopLossPrice": 3800}]
+
+    app.mx.price = lambda _symbol: 3900
+    app.mx.tpsl_list = stops
+    app._tpsl_worker(posicion, None, 3800)
+
+    accion, comprobar = app.verificaciones[0]
+    assert accion == "cambio de TP/SL"
+    assert comprobar()
+
+
+def test_verificacion_tpsl_bitunix_coteja_par_y_lado():
+    class FakeBitunix:
+        def positions(self):
+            return [{"symbol": "BTCUSDT", "side": "BUY", "qty": 0.01}]
+
+        def tpsl_list(self):
+            return [
+                {"symbol": "BTCUSDT", "tpPrice": 110},
+                {"symbol": "BTCUSDT", "slPrice": 90},
+            ]
+
+    ctl = _control(None)
+    pos = {
+        "symbol": "BTC_USDT",
+        "positionId": "p1",
+        "positionType": 1,
+        "_priceScale": 1,
+    }
+
+    assert ctl._tpsl_coincide(FakeBitunix(), "bitunix", pos, 110, 90)
+
+
+def test_verificacion_tpsl_bingx_ignora_condicional_del_lado_opuesto():
+    class FakeBingx:
+        def positions(self):
+            return [{"symbol": "BTC-USDT", "positionSide": "LONG", "positionAmt": 0.01}]
+
+        def open_orders(self, _symbol):
+            return [
+                {
+                    "symbol": "BTC-USDT",
+                    "positionSide": "SHORT",
+                    "type": "STOP_MARKET",
+                    "stopPrice": 90,
+                },
+                {
+                    "symbol": "BTC-USDT",
+                    "positionSide": "LONG",
+                    "type": "TAKE_PROFIT_MARKET",
+                    "stopPrice": 110,
+                },
+                {
+                    "symbol": "BTC-USDT",
+                    "positionSide": "LONG",
+                    "type": "STOP_MARKET",
+                    "stopPrice": 90,
+                },
+            ]
+
+    ctl = _control(None)
+    pos = {
+        "symbol": "BTC_USDT",
+        "positionType": 1,
+        "_priceScale": 1,
+    }
+
+    assert ctl._tpsl_coincide(FakeBingx(), "bingx", pos, 110, 90)
+
+
+def test_verificador_publica_confirmacion_y_actualiza_las_tablas(app):
+    app.VERIFICACION_INTERVALO = 0
+
+    controller.Control._iniciar_verificacion(app, "apertura", lambda: True)
+
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+    assert any(m == ("status", "El broker confirmó la operación: apertura.") for m in mensajes)
+    assert app.session.refrescos == ["positions", "orders"]
+
+
+def test_verificador_no_presenta_como_confirmada_una_consulta_fallida(app):
+    app.VERIFICACION_INTERVALO = 0
+
+    def fallo():
+        raise httpx.ReadTimeout("timeout")
+
+    controller.Control._iniciar_verificacion(app, "apertura", fallo)
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert any("no se pudo verificar" in m[1].lower() for m in mensajes if m[0] == "status")
+
+
+def test_verificador_reintenta_lectura_tras_error_de_transporte(app):
+    app.session._parar = threading.Event()
+    app.VERIFICACION_INTERVALO = 0
+    llamadas = 0
+
+    def comprobar():
+        nonlocal llamadas
+        llamadas += 1
+        if llamadas == 1:
+            raise httpx.ReadTimeout("timeout")
+        return True
+
+    controller.Control._iniciar_verificacion(app, "reverse", comprobar)
+
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+    assert llamadas == 2
+    assert any("confirmó la operación" in m[1].lower() for m in mensajes if m[0] == "status")
+
+
+def test_verificador_pide_revision_si_no_encuentra_cambios(app):
+    app.VERIFICACION_INTERVALO = 0
+
+    controller.Control._iniciar_verificacion(app, "cierre", lambda: False)
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert any("no se encontró evidencia" in m[1].lower() for m in mensajes if m[0] == "status")
+    assert not any("confirmó la operación" in m[1].lower() for m in mensajes if m[0] == "status")
+    assert app.session.refrescos == ["positions", "orders"]
 
 
 def test_editar_el_tpsl_cancela_todos_los_stop_de_la_posicion(app, posicion):
@@ -337,8 +669,9 @@ def test_timeout_al_abrir_avisa_estado_desconocido_y_refresca(app):
         "order",
         (
             False,
-            "Estado desconocido: revisa Posiciones y Órdenes antes de reenviar. "
-            "No se hará un reintento automático.",
+            "No pudimos confirmar si la solicitud llegó al broker. El resultado es "
+            "desconocido. Revisa Posiciones y Órdenes antes de volver a intentarlo. "
+            "No se volverá a enviar automáticamente.",
         ),
     )
     assert app.q.get_nowait()[0] == "closed"

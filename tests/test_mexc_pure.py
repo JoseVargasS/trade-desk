@@ -83,12 +83,18 @@ def test_decorate_positions_aguanta_un_contrato_que_falla():
         def contract(self, symbol):
             raise MexcError("sin red")
 
-    pos = decorate_positions(SinContrato(), [{"positionId": 2, "symbol": "BTC_USDT"}])[0]
+    errores = []
+    pos = decorate_positions(
+        SinContrato(),
+        [{"positionId": 2, "symbol": "BTC_USDT"}],
+        on_error=lambda recurso, exc: errores.append((recurso, exc)),
+    )[0]
     assert pos["_contractSize"] == 0
     assert pos["_volUnit"] == 1
     assert pos["_priceScale"] == 2
     assert pos["_name"] == "BTC_USDT"
     assert pos["_tp"] == 0.0 and pos["_sl"] == 0.0 and pos["_tpsl_id"] is None
+    assert errores and errores[0][0] == "contrato"
 
 
 def test_la_fee_es_comision_mas_funding():

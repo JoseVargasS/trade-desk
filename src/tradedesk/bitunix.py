@@ -185,6 +185,7 @@ class Bitunix:
         self._contratos = {}
         self._precios = {}
         self._modo = ""
+        self.on_error = None
 
     # -------------------------------------------------------------- transporte
     @property
@@ -376,8 +377,10 @@ class Bitunix:
         try:
             datos = self._get("/api/v1/futures/account/position_mode", {}) or {}
             self._modo = str(datos.get("positionMode") or "HEDGE").upper()
-        except Exception:
+        except Exception as exc:
             self._modo = "HEDGE"
+            if self.on_error:
+                self.on_error("modo de posición", exc)
         return self._modo
 
     def change_leverage(self, simbolo, leverage):

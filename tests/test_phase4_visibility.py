@@ -1,5 +1,6 @@
 import builtins
 import queue
+import threading
 
 import pytest
 
@@ -65,7 +66,7 @@ def _session(mx, bitunix, bingx):
 
 
 def test_posiciones_de_un_broker_fallido_no_ocultan_los_otros(monkeypatch):
-    monkeypatch.setattr(session_module, "decorate_positions", lambda _c, rows: rows)
+    monkeypatch.setattr(session_module, "decorate_positions", lambda _c, rows, **_kw: rows)
     monkeypatch.setattr(session_module, "decorate_positions_bitunix", lambda _c, rows, _s: rows)
     monkeypatch.setattr(session_module, "decorate_positions_bingx", lambda _c, rows, _o, _f: rows)
     mx = ReadClient(fail="positions")
@@ -77,6 +78,25 @@ def test_posiciones_de_un_broker_fallido_no_ocultan_los_otros(monkeypatch):
 
     assert [fila["symbol"] for fila in filas] == ["ETHUSDT", "BTC-USDT"]
     assert app.q.get_nowait() == ("error", "posiciones mexc: positions unavailable")
+
+
+def test_fallo_de_comisiones_bingx_se_avisa_sin_ocultar_posiciones(monkeypatch):
+    monkeypatch.setattr(session_module, "decorate_positions", lambda _c, rows, **_kw: rows)
+    monkeypatch.setattr(session_module, "decorate_positions_bitunix", lambda _c, rows, _s: rows)
+    monkeypatch.setattr(session_module, "decorate_positions_bingx", lambda _c, rows, _o, _f: rows)
+    bingx = ReadClient(positions=[{"symbol": "BTC-USDT"}])
+
+    def falla():
+        raise RuntimeError("historial no disponible")
+
+    bingx.comisiones = falla
+    app = _session(ReadClient(), ReadClient(), bingx)
+
+    filas = app.posiciones_todas()
+    mensajes = list(app.q.queue)
+
+    assert [fila["symbol"] for fila in filas] == ["BTC-USDT"]
+    assert any("comisiones de posiciones bingx" in msg[1] for msg in mensajes)
 
 
 def test_ordenes_de_un_broker_fallido_no_ocultan_los_otros(monkeypatch):
@@ -147,6 +167,7 @@ def test_respuesta_mexc_no_json_no_se_cachea():
 def test_fallo_al_escribir_log_se_avisa_sin_repetirlo(monkeypatch, tmp_path):
     app = object.__new__(Session)
     app.q = queue.Queue()
+    app._log_lock = threading.Lock()
     app._log_error_reported = False
     monkeypatch.setattr(session_module.paths, "DATA_DIR", tmp_path)
 

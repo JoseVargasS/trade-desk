@@ -47,7 +47,9 @@ class Session:
             "bingx": bool(self.bingx.key),
         }
         self.q = queue.Queue()
+        self._log_lock = threading.Lock()
         self._log_error_reported = False
+        self.bitunix.on_error = lambda recurso, exc: self._error_consulta(recurso, "bitunix", exc)
         self.tarjetas = self._tarjetas()
         self.precios = {}
         self.mercados = {}
@@ -61,6 +63,7 @@ class Session:
         self.historial_hay_mas = {"mexc": True, "bitunix": True, "bingx": True}
         # archivo local: el broker borra su historial, esto queda
         self.archivo = Archivo(paths.DATA_DIR / "operaciones.json")
+        self._archivo_estado_publicado = None
         self.ver_historial = False
         self._parar = threading.Event()
         self._hilos = []
@@ -69,6 +72,9 @@ class Session:
             self.q.put(("history", self.archivo.todas()))
         if getattr(self.archivo, "aviso", None):
             self.q.put(("notice", self.archivo.aviso))
+        if getattr(self.archivo, "estado", None):
+            self.q.put(("status", self.archivo.estado))
+            self._archivo_estado_publicado = self.archivo.estado
 
     # --------------------------------------------------------------- tarjetas
     def cliente(self, exchange):
@@ -246,9 +252,9 @@ class Session:
                     self._hist_ordenes[clave] = orden
                 if len(filas) < HISTORIAL_PAGINA:
                     self.historial_hay_mas[nombre] = False
-            self.q.put(
-                ("history", self.archivo.fusionar(operaciones(list(self._hist_ordenes.values()))))
-            )
+            filas = self.archivo.fusionar(operaciones(list(self._hist_ordenes.values())))
+            self.q.put(("history", filas))
+            self._publicar_estado_archivo()
             self.q.put(("history_mas", any(self.historial_hay_mas.values())))
         finally:
             self.q.put(("history_cargando", False))
@@ -263,31 +269,26 @@ class Session:
         from datetime import datetime
 
         ruta = paths.DATA_DIR / "trades.log"
-        try:
-            self._rotar_log(ruta)
-            with open(str(ruta), "a", encoding="utf-8") as f:
-                f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}\n")
-            self._log_error_reported = False
-        except Exception as exc:
-            if not self._log_error_reported:
-                self._log_error_reported = True
-                self.q.put(("error", f"No se pudo escribir trades.log: {exc}"))
+        with self._log_lock:
+            try:
+                self._rotar_log(ruta)
+                with open(str(ruta), "a", encoding="utf-8") as f:
+                    f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}\n")
+                self._log_error_reported = False
+            except Exception as exc:
+                if not self._log_error_reported:
+                    self._log_error_reported = True
+                    self.q.put(("error", f"No se pudo escribir trades.log: {exc}"))
 
     @staticmethod
     def _rotar_log(ruta, limite=1_000_000, copias=3):
-        try:
-            if not ruta.exists() or ruta.stat().st_size < limite:
-                return
-            for indice in range(copias, 0, -1):
-                origen = ruta if indice == 1 else ruta.with_name(f"{ruta.name}.{indice - 1}")
-                destino = ruta.with_name(f"{ruta.name}.{indice}")
-                if origen.exists():
-                    try:
-                        os.replace(origen, destino)
-                    except OSError:
-                        pass
-        except OSError:
-            pass
+        if not ruta.exists() or ruta.stat().st_size < limite:
+            return
+        for indice in range(copias, 0, -1):
+            origen = ruta if indice == 1 else ruta.with_name(f"{ruta.name}.{indice - 1}")
+            destino = ruta.with_name(f"{ruta.name}.{indice}")
+            if origen.exists():
+                os.replace(origen, destino)
 
     def refresh_positions(self):
         try:
@@ -301,7 +302,13 @@ class Session:
         cliente = self.cliente("mexc")
         if cliente:
             try:
-                posiciones = decorate_positions(cliente, cliente.positions())
+                posiciones = decorate_positions(
+                    cliente,
+                    cliente.positions(),
+                    on_error=lambda recurso, exc: self._error_consulta(
+                        f"{recurso} de posiciones", "mexc", exc
+                    ),
+                )
             except Exception as exc:
                 self._error_consulta("posiciones", "mexc", exc)
             else:
@@ -328,7 +335,11 @@ class Session:
                 condicionales = []
             try:
                 posiciones = cliente.positions()
-                comisiones = cliente.comisiones() if posiciones else {}
+                try:
+                    comisiones = cliente.comisiones() if posiciones else {}
+                except Exception as exc:
+                    self._error_consulta("comisiones de posiciones", "bingx", exc)
+                    comisiones = {}
                 filas.extend(
                     decorate_positions_bingx(cliente, posiciones, condicionales, comisiones)
                 )
@@ -340,6 +351,12 @@ class Session:
         texto = f"{recurso} {broker}: {exc}"
         self.log(f"ERR {recurso} {broker}: {type(exc).__name__}")
         self.q.put(("error", texto))
+
+    def _publicar_estado_archivo(self):
+        estado = getattr(self.archivo, "estado", None)
+        if estado and estado != self._archivo_estado_publicado:
+            self.q.put(("status", estado))
+            self._archivo_estado_publicado = estado
 
     def refresh_orders(self):
         try:
@@ -409,12 +426,21 @@ class Session:
             self.q.put(("funding", dict(self.fondos)))
 
     # ------------------------------------------------------------------ config
-    @staticmethod
-    def _leer_config():
+    def _leer_config(self):
         try:
-            return json.loads((paths.DATA_DIR / "config.json").read_text(encoding="utf-8"))
-        except Exception:
+            datos = json.loads((paths.DATA_DIR / "config.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
             return {}
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.log(f"ERR leer config.json: {type(exc).__name__}")
+            self.q.put(("status", f"No se pudo leer config.json: {exc}"))
+            return {}
+        if not isinstance(datos, dict):
+            self.q.put(
+                ("status", "No se pudo leer config.json: el contenido no es un objeto JSON.")
+            )
+            return {}
+        return datos
 
     def _tarjetas(self):
         tarjetas = []
@@ -470,13 +496,17 @@ class Session:
                 timeout=5, transport=httpx.HTTPTransport(local_address="0.0.0.0")
             ) as cliente:
                 datos["v4"] = cliente.get("https://api.ipify.org").text.strip()
-        except Exception:
+        except Exception as exc:
             datos["v4"] = ""
+            self.log(f"ERR consultar IP IPv4: {type(exc).__name__}")
+            self.q.put(("error", f"No se pudo consultar la IP IPv4: {exc}"))
         try:
             with httpx.Client(timeout=5) as cliente:
                 datos["v6"] = cliente.get("https://api6.ipify.org").text.strip()
-        except Exception:
+        except Exception as exc:
             datos["v6"] = ""
+            self.log(f"ERR consultar IP IPv6: {type(exc).__name__}")
+            self.q.put(("error", f"No se pudo consultar la IP IPv6: {exc}"))
         self.q.put(("ip", datos))
 
     def _cargar_catalogo(self):

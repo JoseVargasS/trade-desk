@@ -368,10 +368,7 @@ class Bingx:
         if cache and ahora - cache[0] < 2:
             return cache[1]
         total = {}
-        try:
-            filas = _filas(self._get("/openApi/swap/v2/trade/allOrders", {"limit": int(limite)}))
-        except Exception:
-            filas = []
+        filas = _filas(self._get("/openApi/swap/v2/trade/allOrders", {"limit": int(limite)}))
         for orden in filas:
             if _texto(orden, "status").upper() != "FILLED":
                 continue

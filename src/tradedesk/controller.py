@@ -33,6 +33,9 @@ class BrokerNoDisponibleError(RuntimeError):
 class Control:
     """Acciones de la mesa. `dry` es un callable: DRY-RUN siempre arranca prendido."""
 
+    VERIFICACION_INTERVALO = 2.0
+    VERIFICACION_MUESTRAS = 5
+
     def __init__(self, session, port, dry=None):
         self.session = session
         self.port = port
@@ -49,6 +52,245 @@ class Control:
 
     def _escala(self, symbol):
         return int(self.session.contract_for(symbol).get("priceScale") or 2)
+
+    @staticmethod
+    def _resultado_desconocido(exc):
+        return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
+
+    @staticmethod
+    def _mensaje_desconocido(accion):
+        return {
+            "abrir": (
+                "No pudimos confirmar si la solicitud llegó al broker. El resultado es "
+                "desconocido. Revisa Posiciones y Órdenes antes de volver a intentarlo. "
+                "No se volverá a enviar automáticamente."
+            ),
+            "cerrar": (
+                "No pudimos confirmar si el cierre llegó al broker. El resultado es "
+                "desconocido. Revisa Posiciones y Órdenes antes de reintentar. "
+                "No se volverá a enviar automáticamente."
+            ),
+            "reverse": (
+                "No pudimos confirmar si el reverse se completó. El resultado es desconocido. "
+                "Revisa Posiciones y Órdenes antes de reintentar. "
+                "No se volverá a enviar automáticamente."
+            ),
+            "tpsl": (
+                "No pudimos confirmar si el cambio de TP/SL llegó al broker. Verifica "
+                "Posiciones y Órdenes antes de volver a aplicarlo. No se reintentará "
+                "automáticamente."
+            ),
+        }[accion]
+
+    @staticmethod
+    def _clave_symbol(symbol):
+        return str(symbol or "").replace("_", "").replace("-", "").upper()
+
+    @staticmethod
+    def _numero(valor):
+        try:
+            return abs(float(valor or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _lado_posicion(fila, exchange):
+        if fila.get("positionType") is not None:
+            return 1 if int(fila.get("positionType") or 1) == 1 else 2
+        if exchange == "mexc":
+            return 1 if int(fila.get("positionType") or 1) == 1 else 2
+        if exchange == "bitunix":
+            return 1 if str(fila.get("side") or "").upper() in ("BUY", "LONG") else 2
+        lado = str(fila.get("positionSide") or "").upper()
+        if lado in ("LONG", "SHORT"):
+            return 1 if lado == "LONG" else 2
+        return 1 if float(fila.get("positionAmt") or 0) >= 0 else 2
+
+    @staticmethod
+    def _volumen_posicion(fila, exchange):
+        if "holdVol" in fila:
+            return Control._numero(fila.get("holdVol"))
+        campo = {"mexc": "holdVol", "bitunix": "qty", "bingx": "positionAmt"}[exchange]
+        return Control._numero(fila.get(campo))
+
+    def _volumen_cache(self, exchange, symbol, side):
+        return sum(
+            self._volumen_posicion(fila, exchange)
+            for fila in getattr(self.session, "ultimas_posiciones", ())
+            if (fila.get("_exchange") or "mexc") == exchange
+            and self._clave_symbol(fila.get("symbol")) == self._clave_symbol(symbol)
+            and self._lado_posicion(fila, exchange) == side
+        )
+
+    def _ids_cache_ordenes(self, exchange):
+        return {
+            str(fila.get("orderId") or "")
+            for fila in getattr(self.session, "ultimas_ordenes", ())
+            if (fila.get("_exchange") or "mexc") == exchange
+        }
+
+    def _volumen_lado(self, cliente, exchange, symbol, side):
+        filas = cliente.positions()
+        total = 0.0
+        for fila in filas or ():
+            if self._clave_symbol(fila.get("symbol")) != self._clave_symbol(symbol):
+                continue
+            if self._lado_posicion(fila, exchange) == side:
+                total += self._volumen_posicion(fila, exchange)
+        return total
+
+    def _orden_nueva(self, cliente, exchange, symbol, side, precio, ids_anteriores, cierre=False):
+        for fila in cliente.open_orders() or ():
+            if self._clave_symbol(fila.get("symbol")) != self._clave_symbol(symbol):
+                continue
+            if str(fila.get("orderId") or fila.get("id") or "") in ids_anteriores:
+                continue
+            tipo = str(fila.get("type") or fila.get("origType") or "").upper()
+            if "STOP" in tipo or "TAKE_PROFIT" in tipo:
+                continue
+            trade_side = str(fila.get("tradeSide") or "").upper()
+            if (
+                exchange == "bitunix"
+                and trade_side
+                and trade_side != ("CLOSE" if cierre else "OPEN")
+            ):
+                continue
+            if exchange == "mexc":
+                lado = int(fila.get("side") or 0)
+                codigos = (4, 2) if cierre else (1, 3)
+                lado = 1 if lado == codigos[0] else 2 if lado == codigos[1] else 0
+            elif exchange == "bitunix":
+                lado = 1 if str(fila.get("side") or "").upper() in ("BUY", "LONG") else 2
+            else:
+                side_name = str(fila.get("positionSide") or "").upper()
+                if side_name in ("LONG", "SHORT"):
+                    lado = 1 if side_name == "LONG" else 2
+                else:
+                    lado = 1 if str(fila.get("side") or "").upper() == "BUY" else 2
+            if lado != side:
+                continue
+            if precio is not None and abs(self._numero(fila.get("price")) - precio) > 1e-8:
+                continue
+            return True
+        return False
+
+    def _tpsl_coincide(self, cliente, exchange, pos, tp, sl):
+        symbol = pos.get("symbol")
+        side = self._lado_posicion(pos, exchange)
+        if exchange == "bingx":
+            ordenes = cliente.open_orders(symbol)
+            posiciones = [
+                posicion
+                for posicion in cliente.positions() or ()
+                if self._clave_symbol(posicion.get("symbol")) == self._clave_symbol(symbol)
+            ]
+            if not any(self._lado_posicion(posicion, exchange) == side for posicion in posiciones):
+                return False
+            lado_ambiguo = len(posiciones) > 1
+            actual_tp = actual_sl = 0.0
+            for orden in ordenes or ():
+                if self._clave_symbol(orden.get("symbol")) != self._clave_symbol(symbol):
+                    continue
+                lado = str(orden.get("positionSide") or "").upper()
+                if lado in ("LONG", "SHORT") and (1 if lado == "LONG" else 2) != side:
+                    continue
+                if lado_ambiguo and lado not in ("LONG", "SHORT"):
+                    continue
+                tipo = str(orden.get("type") or orden.get("origType") or "").upper()
+                precio = self._numero(orden.get("stopPrice"))
+                if "TAKE_PROFIT" in tipo:
+                    actual_tp = precio
+                elif "STOP" in tipo:
+                    actual_sl = precio
+        else:
+            stops = cliente.tpsl_list()
+            actual_tp = actual_sl = 0.0
+            for stop in stops or ():
+                if exchange == "mexc":
+                    if str(stop.get("positionId")) != str(pos.get("positionId")):
+                        continue
+                    actual_tp = self._numero(stop.get("takeProfitPrice")) or actual_tp
+                    actual_sl = self._numero(stop.get("stopLossPrice")) or actual_sl
+                elif self._clave_symbol(stop.get("symbol")) == self._clave_symbol(symbol):
+                    actual_tp = (
+                        self._numero(stop.get("tpPrice") or stop.get("takeProfitPrice"))
+                        or actual_tp
+                    )
+                    actual_sl = (
+                        self._numero(stop.get("slPrice") or stop.get("stopLossPrice")) or actual_sl
+                    )
+            if exchange == "bitunix":
+                posiciones = [
+                    posicion
+                    for posicion in cliente.positions() or ()
+                    if self._clave_symbol(posicion.get("symbol")) == self._clave_symbol(symbol)
+                ]
+                if len(posiciones) != 1 or self._lado_posicion(posiciones[0], exchange) != side:
+                    return False
+        escala = int(pos.get("_priceScale") or 2)
+        tolerancia = 10**-escala
+        return abs(actual_tp - (tp or 0)) <= tolerancia and abs(actual_sl - (sl or 0)) <= tolerancia
+
+    def _iniciar_verificacion(self, accion, comprobar):
+        """Consulta solo lectura hasta recuperar conexión y cotejar el estado."""
+        self.q.put(("status", f"Consultando al broker para verificar {accion}…"))
+
+        def verificar():
+            detener = getattr(self.session, "_parar", None)
+            muestras = 0
+            while detener is None or not detener.is_set():
+                try:
+                    confirmado = comprobar()
+                except Exception as exc:
+                    if not self._resultado_desconocido(exc):
+                        self.session.log(f"ERR verificar {accion}: {type(exc).__name__}")
+                        self.q.put(
+                            (
+                                "status",
+                                f"No se pudo verificar {accion}: {exc}. Revisa Posiciones/Órdenes.",
+                            )
+                        )
+                        self.session.refresh_positions()
+                        self.session.refresh_orders()
+                        return
+                    muestras = 0
+                    if detener is None:
+                        self.q.put(
+                            (
+                                "status",
+                                f"La conexión sigue sin responder; no se pudo verificar {accion}. "
+                                "Revisa Posiciones/Órdenes.",
+                            )
+                        )
+                        break
+                    if detener.wait(self.VERIFICACION_INTERVALO):
+                        return
+                    continue
+                if confirmado:
+                    texto = f"El broker confirmó la operación: {accion}."
+                    self.session.log(f"OK  verificado {accion}")
+                    self.q.put(("status", texto))
+                    self.session.refresh_positions()
+                    self.session.refresh_orders()
+                    return
+                muestras += 1
+                if muestras >= self.VERIFICACION_MUESTRAS:
+                    self.q.put(
+                        (
+                            "status",
+                            f"No se encontró evidencia de {accion}. Revisa Posiciones/Órdenes "
+                            "antes de decidir si vuelves a intentarlo.",
+                        )
+                    )
+                    self.session.refresh_positions()
+                    self.session.refresh_orders()
+                    return
+                if detener is None:
+                    time.sleep(self.VERIFICACION_INTERVALO)
+                elif detener.wait(self.VERIFICACION_INTERVALO):
+                    return
+
+        threading.Thread(target=verificar, daemon=True).start()
 
     # ------------------------------------------------------------------- abrir
     def _cliente_de(self, nombre):
@@ -107,6 +349,8 @@ class Control:
 
     def _do_abrir(self, side, form, dry, exchange="mexc"):
         symbol = form["symbol"]
+        mx = None
+        verificacion = None
         try:
             mx = self._cliente_de(exchange)
             precio = form.get("price")
@@ -135,6 +379,10 @@ class Control:
                     )
                 )
                 return
+            volumen_anterior = self._volumen_cache(
+                exchange, symbol, 1 if side.upper() == "LONG" else 2
+            )
+            ids_anteriores = self._ids_cache_ordenes(exchange)
             data, vol, px = mx.open_market(
                 symbol,
                 side,
@@ -158,14 +406,27 @@ class Control:
             self.session.refresh_positions()
             self.session.refresh_orders()
         except Exception as exc:
-            incierto = isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
+            incierto = not dry and self._resultado_desconocido(exc)
             if incierto:
-                mensaje = (
-                    "Estado desconocido: revisa Posiciones y Órdenes antes de reenviar. "
-                    "No se hará un reintento automático."
-                )
+                mensaje = self._mensaje_desconocido("abrir")
                 self.session.refresh_positions()
                 self.session.refresh_orders()
+                if mx is not None:
+                    lado = 1 if side.upper() == "LONG" else 2
+
+                    def comprobar():
+                        return self._volumen_lado(mx, exchange, symbol, lado) > (
+                            volumen_anterior + 1e-12
+                        ) or self._orden_nueva(
+                            mx,
+                            exchange,
+                            symbol,
+                            lado,
+                            form.get("price"),
+                            ids_anteriores,
+                        )
+
+                    verificacion = comprobar
                 titulo = "Estado de la orden desconocido"
                 detalle_log = type(exc).__name__
             elif isinstance(exc, BrokerNoDisponibleError):
@@ -180,6 +441,8 @@ class Control:
             self.q.put(("order", (False, mensaje)))
             self.q.put(("closed", mensaje))
             self.q.put(("notice", (titulo, mensaje, True)))
+            if verificacion:
+                self._iniciar_verificacion("apertura", verificacion)
 
     # ------------------------------------------------------------------ cierres
     def cerrar(self, pos, info=None):
@@ -247,20 +510,60 @@ class Control:
 
     def _do_cerrar(self, positions, vol=None, price=None):
         failed, done = [], 0
+        incierto = False
+        verificaciones = []
         single = len(positions) == 1  # solo el cierre de una fila lleva vol/precio
         for i, pos in enumerate(positions):
+            exchange = pos.get("_exchange") or "mexc"
+            cliente = None
+            lado = self._lado_posicion(pos, exchange)
+            volumen_anterior = self._volumen_posicion(pos, exchange)
+            volumen_cerrar = vol if single and vol is not None else volumen_anterior
+            ids_anteriores = self._ids_cache_ordenes(exchange)
             try:
-                self.broker_de(pos).close_position(
-                    pos, vol if single else None, price if single else None
-                )
+                cliente = self.broker_de(pos)
+                cliente.close_position(pos, vol if single else None, price if single else None)
                 done += 1
                 self.session.log(
                     f"OK  cerrada {pos.get('symbol')} vol={vol or pos.get('holdVol')}"
                     f"{' limite ' + str(price) if price else ''}"
                 )
             except Exception as e:
-                failed.append(f"{pos.get('symbol')}: {e}")
-                self.session.log(f"ERR cerrar {pos.get('symbol')}: {e}")
+                if self._resultado_desconocido(e):
+                    incierto = True
+                    mensaje = self._mensaje_desconocido("cerrar")
+                    failed.append(f"{pos.get('symbol')}: {mensaje}")
+                    self.session.log(f"ERR cerrar {pos.get('symbol')}: {type(e).__name__}")
+
+                    def comprobar(
+                        cliente=cliente,
+                        exchange=exchange,
+                        pos=pos,
+                        lado=lado,
+                        volumen_anterior=volumen_anterior,
+                        volumen_cerrar=volumen_cerrar,
+                        ids_anteriores=ids_anteriores,
+                    ):
+                        if cliente is None:
+                            return False
+                        objetivo = max(0.0, volumen_anterior - volumen_cerrar)
+                        tolerancia = max(1e-12, volumen_anterior * 1e-8)
+                        return self._volumen_lado(
+                            cliente, exchange, pos.get("symbol"), lado
+                        ) <= objetivo + tolerancia or self._orden_nueva(
+                            cliente,
+                            exchange,
+                            pos.get("symbol"),
+                            lado,
+                            price if single else None,
+                            ids_anteriores,
+                            cierre=True,
+                        )
+
+                    verificaciones.append(comprobar)
+                else:
+                    failed.append(f"{pos.get('symbol')}: {e}")
+                    self.session.log(f"ERR cerrar {pos.get('symbol')}: {e}")
             if i < len(positions) - 1:
                 time.sleep(0.6)
         msg = f"Cerradas {done}" + (f" · fallaron {len(failed)}" if failed else "")
@@ -268,6 +571,10 @@ class Control:
         if failed:
             self.q.put(("status", " | ".join(failed)))
         self.session.refresh_positions()
+        if incierto:
+            self.session.refresh_orders()
+        for comprobar in verificaciones:
+            self._iniciar_verificacion("cierre", comprobar)
 
     def reverse(self, pos):
         if self.dry():
@@ -287,14 +594,42 @@ class Control:
             return
 
         def run():
+            verificacion = None
             try:
-                self.broker_de(pos).reverse(pos)
+                cliente = self.broker_de(pos)
+                exchange = pos.get("_exchange") or "mexc"
+                lado = self._lado_posicion(pos, exchange)
+                symbol = pos.get("symbol")
+                volumen = self._volumen_posicion(pos, exchange)
+                lado_contrario = 2 if lado == 1 else 1
+                volumen_contrario = self._volumen_cache(exchange, symbol, lado_contrario)
+                cliente.reverse(pos)
                 self.session.log(f"OK  reverse {pos.get('symbol')} vol={pos.get('holdVol')}")
                 self.q.put(("closed", f"Revertida {pos.get('symbol')}"))
             except Exception as e:
-                self.session.log(f"ERR reverse {pos.get('symbol')}: {e}")
-                self.q.put(("closed", f"Error reverse: {e}"))
+                if self._resultado_desconocido(e):
+                    mensaje = self._mensaje_desconocido("reverse")
+                    self.session.log(f"ERR reverse {pos.get('symbol')}: {type(e).__name__}")
+                    self.q.put(("closed", mensaje))
+                    self.q.put(("status", mensaje))
+                    self.session.refresh_orders()
+                    if "cliente" in locals():
+
+                        def comprobar():
+                            tolerancia = max(1e-12, volumen * 1e-8)
+                            return (
+                                self._volumen_lado(cliente, exchange, symbol, lado) <= tolerancia
+                                and self._volumen_lado(cliente, exchange, symbol, lado_contrario)
+                                > volumen_contrario + tolerancia
+                            )
+
+                        verificacion = comprobar
+                else:
+                    self.session.log(f"ERR reverse {pos.get('symbol')}: {e}")
+                    self.q.put(("closed", f"Error reverse: {e}"))
             self.session.refresh_positions()
+            if verificacion:
+                self._iniciar_verificacion("reverse", verificacion)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -313,18 +648,47 @@ class Control:
 
         def run():
             fallos = []
+            incierto = False
+            verificaciones = []
             for nombre, cliente in self._brokers():
+                posiciones_anteriores = [
+                    pos
+                    for pos in getattr(self.session, "ultimas_posiciones", ())
+                    if (pos.get("_exchange") or "mexc") == nombre
+                ]
                 try:
                     cliente.close_all()
                     self.session.log(f"OK  close_all {nombre}")
                 except Exception as e:
-                    fallos.append(f"{nombre}: {e}")
-                    self.session.log(f"ERR close_all {nombre}: {e}")
+                    if self._resultado_desconocido(e):
+                        incierto = True
+                        fallos.append(f"{nombre}: {self._mensaje_desconocido('cerrar')}")
+                        self.session.log(f"ERR close_all {nombre}: {type(e).__name__}")
+
+                        simbolos = {
+                            self._clave_symbol(pos.get("symbol")) for pos in posiciones_anteriores
+                        }
+
+                        def comprobar(cliente=cliente, nombre=nombre, simbolos=simbolos):
+                            actuales = cliente.positions()
+                            return not any(
+                                not simbolos or self._clave_symbol(pos.get("symbol")) in simbolos
+                                for pos in actuales or ()
+                            )
+
+                        verificaciones.append((f"cierre total en {nombre}", comprobar))
+                    else:
+                        fallos.append(f"{nombre}: {e}")
+                        self.session.log(f"ERR close_all {nombre}: {e}")
             if fallos:
                 self.q.put(("closed", " | ".join(fallos)))
             else:
                 self.q.put(("closed", "Todas las posiciones cerradas"))
             self.session.refresh_positions()
+            if incierto:
+                self.session.refresh_orders()
+            for accion, comprobar in verificaciones:
+                self._iniciar_verificacion(accion, comprobar)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -398,15 +762,44 @@ class Control:
 
     def _tpsl_worker(self, pos, tp, sl, es_be=False):
         symbol = pos.get("symbol")
+        incierto = False
+        cliente = None
         try:
+            cliente = self.broker_de(pos)
             avisos = self._aplicar_tpsl(pos, tp, sl, es_be)
             self.q.put(("closed", f"TP/SL actualizado · {symbol}"))
             if avisos:
                 self.q.put(("notice", ("SL en ganancia", "\n\n".join(avisos), False)))
         except Exception as e:
-            self.session.log(f"ERR tpsl {symbol}: {e}")
-            self.q.put(("closed", f"Error TP/SL: {e}"))
-            self.q.put(("notice", ("TP / SL rechazado", str(e), True)))
+            if self._resultado_desconocido(e):
+                incierto = True
+                mensaje = self._mensaje_desconocido("tpsl")
+                self.session.log(f"ERR tpsl {symbol}: {type(e).__name__}")
+                self.q.put(("closed", mensaje))
+                self.q.put(("status", mensaje))
+                if cliente is not None:
+                    exchange = pos.get("_exchange") or "mexc"
+
+                    def comprobar():
+                        precio = cliente.price(symbol)
+                        tp_final, sl_final, _ = plan_tp_sl(
+                            self._lado_posicion(pos, exchange) == 1,
+                            precio,
+                            tp,
+                            sl,
+                        )
+                        return self._tpsl_coincide(cliente, exchange, pos, tp_final, sl_final)
+
+                    self._iniciar_verificacion(
+                        "cambio de TP/SL",
+                        comprobar,
+                    )
+            else:
+                self.session.log(f"ERR tpsl {symbol}: {e}")
+                self.q.put(("closed", f"Error TP/SL: {e}"))
+                self.q.put(("notice", ("TP / SL rechazado", str(e), True)))
+        if incierto:
+            self.session.refresh_orders()
         self.session.refresh_positions()
 
     def be_todas(self, posiciones):
@@ -455,35 +848,70 @@ class Control:
     def _be_worker(self, posiciones, ids):
         total = len(ids)
         hechas, fallos = 0, []
+        incierto = False
+        verificaciones = []
         for pos in posiciones:
             if str(pos.get("positionId")) not in ids:
                 continue
             nombre = pos.get("_name") or pos.get("symbol") or ""
+            cliente = None
+            fila = None
+            tp = None
             try:
                 fila = self._fila_be(pos)
                 tp = float(pos.get("_tp") or 0) or None
+                cliente = self.broker_de(pos)
                 self._aplicar_tpsl(pos, tp, fila["be"], True)
                 hechas += 1
             except Exception as exc:
-                fallos.append(f"{nombre}: {exc}")
+                if self._resultado_desconocido(exc):
+                    incierto = True
+                    fallos.append(f"{nombre}: {self._mensaje_desconocido('tpsl')}")
+                    self.session.log(f"ERR be {nombre}: {type(exc).__name__}")
+                    if cliente is not None:
+                        exchange = pos.get("_exchange") or "mexc"
+                        target_sl = fila["be"] if fila else None
+
+                        def comprobar(
+                            cliente=cliente,
+                            exchange=exchange,
+                            pos=pos,
+                            target_tp=tp,
+                            target_sl=target_sl,
+                        ):
+                            precio = cliente.price(pos.get("symbol"))
+                            tp_final, sl_final, _ = plan_tp_sl(
+                                self._lado_posicion(pos, exchange) == 1,
+                                precio,
+                                target_tp,
+                                target_sl,
+                            )
+                            return self._tpsl_coincide(cliente, exchange, pos, tp_final, sl_final)
+
+                        verificaciones.append((f"TP/SL de {nombre}", comprobar))
+                else:
+                    fallos.append(f"{nombre}: {exc}")
             self.q.put(("closed", f"BE {hechas}/{total} · {nombre}"))
             time.sleep(0.6)
-        self.session.log(f"OK  be {hechas}/{total} ({len(fallos)} fallos)")
+        resultado_log = "ERR" if fallos else "OK "
+        self.session.log(f"{resultado_log} be {hechas}/{total} ({len(fallos)} fallos)")
         self.q.put(("closed", f"BE aplicado en {hechas} de {total} posiciones"))
         if fallos:
             self.q.put(("notice", ("BE incompleto", "\n".join(fallos), True)))
+        if incierto:
+            self.q.put(("status", self._mensaje_desconocido("tpsl")))
+            self.session.refresh_orders()
         self.session.refresh_positions()
+        for accion, comprobar in verificaciones:
+            self._iniciar_verificacion(accion, comprobar)
 
     def _wait_tpsl_clear(self, mx, position_id, timeout=2.5):
         """Espera a que el broker suelte el TP/SL cancelado de esa posicion."""
         end = time.time() + timeout
         while time.time() < end:
-            try:
-                pendientes = [
-                    o for o in mx.tpsl_list() if int(o.get("positionId") or 0) == int(position_id)
-                ]
-            except Exception:
-                pendientes = []
+            pendientes = [
+                o for o in mx.tpsl_list() if int(o.get("positionId") or 0) == int(position_id)
+            ]
             if not pendientes:
                 return True
             time.sleep(0.25)

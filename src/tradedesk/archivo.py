@@ -21,6 +21,8 @@ class Archivo:
         self.filas = {}
         # aviso para la UI: (titulo, mensaje, detalle, danger) o None
         self.aviso = None
+        self.estado = None
+        self._lectura_fallida = False
         self._cargar()
 
     @property
@@ -32,7 +34,25 @@ class Archivo:
             texto = self.ruta.read_text(encoding="utf-8")
         except FileNotFoundError:
             return
-        except OSError:
+        except (OSError, UnicodeError):
+            self._lectura_fallida = True
+            nombre = self._copia_fechada()
+            recupero = self._cargar_backup()
+            if nombre and recupero:
+                self.estado = (
+                    "No se pudo leer operaciones.json. Se cargó el respaldo anterior; "
+                    f"se guardó una copia fechada ({nombre}). No se escribirá sobre el original."
+                )
+            elif nombre:
+                self.estado = (
+                    "No se pudo leer operaciones.json ni recuperar el respaldo; "
+                    f"se conservó una copia fechada ({nombre}). No se escribirá sobre el original."
+                )
+            else:
+                self.estado = (
+                    "No se pudo leer ni respaldar operaciones.json. Se conserva el original "
+                    "sin modificarlo."
+                )
             return
         try:
             datos = json.loads(texto)
@@ -61,18 +81,44 @@ class Archivo:
         return cargadas > 0
 
     def _cuarentena(self):
+        return self._copia_fechada()
+
+    def _copia_fechada(self):
         sello = datetime.now().strftime("%Y%m%d-%H%M%S")
-        destino = self.ruta.with_name(f"{self.ruta.stem}.corrupto-{sello}{self.ruta.suffix}")
-        try:
-            os.replace(self.ruta, destino)
-            return destino.name
-        except OSError:
+        for numero in range(100):
+            sufijo = f"-{numero}" if numero else ""
+            destino = self.ruta.with_name(
+                f"{self.ruta.stem}.corrupto-{sello}{sufijo}{self.ruta.suffix}"
+            )
             try:
-                shutil.copy2(self.ruta, destino)
-                self.ruta.unlink(missing_ok=True)
-                return destino.name
+                with self.ruta.open("rb") as original, destino.open("xb") as respaldo:
+                    shutil.copyfileobj(original, respaldo)
+            except FileExistsError:
+                continue
             except OSError:
+                try:
+                    destino.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 return None
+            self._rotar_copias_fechadas()
+            return destino.name
+        return None
+
+    def _rotar_copias_fechadas(self, conservar=3):
+        prefijo = f"{self.ruta.stem}.corrupto-"
+
+        def antiguedad(copia):
+            sello = copia.stem[len(prefijo) :]
+            numero = int(sello[16:]) if len(sello) > 16 and sello[15] == "-" else 0
+            return sello[:15], numero
+
+        copias = sorted(self.ruta.parent.glob(f"{prefijo}*{self.ruta.suffix}"), key=antiguedad)
+        for copia in copias[:-conservar]:
+            try:
+                copia.unlink()
+            except OSError:
+                pass
 
     def _recuperar_corrupto(self):
         nombre = self._cuarentena()
@@ -129,11 +175,13 @@ class Archivo:
             return
         try:
             shutil.copy2(self.ruta, self.backup)
-        except OSError:
-            pass
+        except OSError as exc:
+            self.estado = f"No se pudo crear el respaldo de operaciones.json: {exc}"
 
     def _guardar(self):
         """Escribe el archivo completo de forma atómica (tmp + replace)."""
+        if self._lectura_fallida:
+            return
         texto = json.dumps(self.todas(), ensure_ascii=False, indent=1)
         temporal = self.ruta.with_name(self.ruta.name + ".tmp")
         try:
@@ -141,7 +189,8 @@ class Archivo:
             self._respaldar()
             temporal.write_text(texto, encoding="utf-8")
             os.replace(temporal, self.ruta)
-        except OSError:
+        except OSError as exc:
+            self.estado = f"No se pudo guardar operaciones.json: {exc}"
             try:
                 temporal.unlink(missing_ok=True)
             except OSError:

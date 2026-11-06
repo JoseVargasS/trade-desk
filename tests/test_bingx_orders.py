@@ -375,6 +375,17 @@ def test_comisiones_del_historial_por_position_id():
     assert round(totales["9"], 6) == 0.0048
 
 
+def test_error_al_cargar_comisiones_no_se_convierte_en_fee_cero():
+    cliente, _ = armado()
+
+    def falla(*_args, **_kwargs):
+        raise RuntimeError("historial no disponible")
+
+    cliente._get = falla
+    with pytest.raises(RuntimeError, match="historial no disponible"):
+        cliente.comisiones()
+
+
 def test_la_posicion_toma_la_fee_del_historial():
     cliente, _ = armado()
     posicion = {

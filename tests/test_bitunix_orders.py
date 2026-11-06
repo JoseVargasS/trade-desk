@@ -38,6 +38,16 @@ def payload_de(enviados, ruta):
     raise AssertionError(f"no se llamo a {ruta}: {[e[0] for e in enviados]}")
 
 
+def test_fallo_al_consultar_modo_se_avisa_y_conserva_fallback_hedge():
+    cliente = Bitunix("k", "s")
+    cliente._get = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("sin conexión"))
+    errores = []
+    cliente.on_error = lambda recurso, exc: errores.append((recurso, exc))
+
+    assert cliente.position_mode() == "HEDGE"
+    assert errores and errores[0][0] == "modo de posición"
+
+
 def test_simbolos():
     assert canonico("BTC_USDT") == "BTCUSDT"
     assert con_guion("BTCUSDT") == "BTC_USDT"

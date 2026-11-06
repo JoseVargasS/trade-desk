@@ -1,6 +1,7 @@
 """Archivo local de operaciones: sobrevive a fallos y al borrado del broker."""
 
 import json
+from pathlib import Path
 
 from tradedesk.archivo import Archivo
 
@@ -42,6 +43,7 @@ def test_archivo_corrupto_va_a_cuarentena(tmp_path):
     cuarentena = list(tmp_path.glob("operaciones.corrupto-*.json"))
     assert len(cuarentena) == 1
     assert "{esto no es json" in cuarentena[0].read_text(encoding="utf-8")
+    assert ruta.read_text(encoding="utf-8") == "{esto no es json"
 
 
 def test_archivo_corrupto_recupera_desde_backup(tmp_path):
@@ -75,3 +77,61 @@ def test_ordena_de_la_mas_nueva_a_la_mas_vieja(tmp_path):
     archivo = Archivo(tmp_path / "operaciones.json")
     filas = archivo.fusionar([_op("a", apertura=1), _op("b", apertura=3), _op("c", apertura=2)])
     assert [fila["_clave"] for fila in filas] == ["b", "c", "a"]
+
+
+def test_error_de_lectura_respalda_y_no_sobrescribe_el_original(tmp_path, monkeypatch):
+    ruta = tmp_path / "operaciones.json"
+    original = b'{"archivo":"no legible"}'
+    ruta.write_bytes(original)
+    leer = Path.read_text
+
+    def falla_en_operaciones(path, *args, **kwargs):
+        if path == ruta:
+            raise PermissionError("sin permiso")
+        return leer(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", falla_en_operaciones)
+    archivo = Archivo(ruta)
+    copias = list(tmp_path.glob("operaciones.corrupto-*.json"))
+
+    assert len(copias) == 1
+    assert copias[0].read_bytes() == original
+    assert ruta.read_bytes() == original
+    assert archivo.estado
+    archivo.fusionar([_op("nueva")])
+    assert ruta.read_bytes() == original
+
+
+def test_respaldos_fechados_rotan_sin_pisar_los_recientes(tmp_path, monkeypatch):
+    ruta = tmp_path / "operaciones.json"
+    leer = Path.read_text
+    monkeypatch.setattr(
+        Path, "read_text", lambda *_a, **_k: (_ for _ in ()).throw(PermissionError())
+    )
+    for indice in range(4):
+        ruta.write_bytes(f"copia-{indice}".encode())
+        archivo = Archivo(ruta)
+        assert archivo.estado
+    monkeypatch.setattr(Path, "read_text", leer)
+
+    copias = sorted(tmp_path.glob("operaciones.corrupto-*.json"))
+    assert len(copias) == 3
+    assert {path.read_bytes() for path in copias} == {b"copia-1", b"copia-2", b"copia-3"}
+
+
+def test_fallo_al_crear_backup_queda_reportado_y_guarda_el_historial(tmp_path, monkeypatch):
+    ruta = tmp_path / "operaciones.json"
+    archivo = Archivo(ruta)
+    archivo.fusionar([_op("anterior")])
+
+    def falla(*_args, **_kwargs):
+        raise OSError("disco lleno")
+
+    monkeypatch.setattr("tradedesk.archivo.shutil.copy2", falla)
+    archivo.fusionar([_op("nueva")])
+
+    assert archivo.estado and "respaldo" in archivo.estado.lower()
+    assert {fila["_clave"] for fila in json.loads(ruta.read_text(encoding="utf-8"))} == {
+        "anterior",
+        "nueva",
+    }

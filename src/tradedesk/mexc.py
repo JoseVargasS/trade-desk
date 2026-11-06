@@ -285,7 +285,7 @@ def margen_inicial(order):
     return float(order.get("orderMargin") or 0)
 
 
-def decorate_positions(mx, positions):
+def decorate_positions(mx, positions, on_error=None):
     """Agrega a cada posicion lo que `open_positions` no devuelve: contrato,
     nombre de MEXC y el TP/SL vigente (que vive en otro endpoint)."""
     for p in positions:
@@ -295,17 +295,21 @@ def decorate_positions(mx, positions):
             p["_volUnit"] = float(contract.get("volUnit") or 1)
             p["_priceScale"] = int(contract.get("priceScale") or 2)
             p["_name"] = display_name(contract)
-        except Exception:
+        except Exception as exc:
             p["_contractSize"] = 0
             p["_volUnit"] = 1
             p["_priceScale"] = 2
             p["_name"] = p.get("symbol", "")
+            if on_error:
+                on_error("contrato", exc)
     stops = {}
     if positions:
         try:
             stops = {int(o.get("positionId") or 0): o for o in mx.tpsl_list()}
-        except Exception:
+        except Exception as exc:
             stops = {}
+            if on_error:
+                on_error("TP/SL", exc)
     for p in positions:
         stop = stops.get(int(p.get("positionId") or 0))
         p["_tp"] = float(stop.get("takeProfitPrice") or 0) if stop else 0.0
