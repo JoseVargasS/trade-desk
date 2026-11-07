@@ -59,7 +59,8 @@ class Spinner(QWidget):
     def paintEvent(self, evento):
         pintor = QPainter(self)
         pintor.setRenderHint(QPainter.Antialiasing)
-        pluma = QPen(self._color, 2)
+        # QPen(color, ancho) con un str no resuelve en PySide6: hay que pasar el QColor
+        pluma = QPen(QColor(self._color), 2)
         pluma.setCapStyle(Qt.RoundCap)
         pintor.setPen(pluma)
         margen = 2
