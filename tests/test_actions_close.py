@@ -78,7 +78,11 @@ def _control(mx, dry=False):
 
 @pytest.fixture
 def app(mx, monkeypatch):
-    monkeypatch.setattr(controller, "threading", types.SimpleNamespace(Thread=InlineThread))
+    fake_threading = types.SimpleNamespace(Thread=InlineThread)
+    monkeypatch.setattr(controller, "threading", fake_threading)
+    monkeypatch.setattr("tradedesk.controller_verificacion.threading", fake_threading)
+    monkeypatch.setattr("tradedesk.controller_tpsl.threading", fake_threading)
+    monkeypatch.setattr("tradedesk.controller_ordenes.threading", fake_threading)
     ctl = _control(mx)
     ctl.port.avisos = []
     ctl.verificaciones = []
