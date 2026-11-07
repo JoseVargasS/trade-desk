@@ -21,7 +21,7 @@ from ..brokers import NOMBRES, TITULOS
 from ..forms import form_tarjeta
 from . import dialogs
 from .cierre import BarraCierre
-from .style import Segmentado, fnt, logo
+from .style import Segmentado, fnt, logo, menu_estilo
 from .style import boton as _boton
 from .style import etiqueta as _etiqueta
 
@@ -267,11 +267,7 @@ class Tarjeta(QFrame):
     def _menu_broker(self):
         """Selector del broker: los logos en el desplegable, como en MEXC."""
         menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu {{ background: {t.CARD}; color: {t.TEXT}; border: 1px solid {t.BORDER}; }}"
-            f"QMenu::item {{ padding: 6px 18px 6px 8px; }}"
-            f"QMenu::item:selected {{ background: {t.SURFACE}; }}"
-        )
+        menu.setStyleSheet(menu_estilo())
         actual = self.broker()
         acciones = {}
         for nombre in NOMBRES:

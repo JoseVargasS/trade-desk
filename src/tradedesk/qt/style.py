@@ -122,6 +122,15 @@ class Segmentado(QWidget):
             )
 
 
+def menu_estilo():
+    """QSS de los menús desplegables (broker de la tarjeta, filtros del calendario)."""
+    return (
+        f"QMenu {{ background: {t.CARD}; color: {t.TEXT}; border: 1px solid {t.BORDER}; }}"
+        f"QMenu::item {{ padding: 6px 18px 6px 8px; }}"
+        f"QMenu::item:selected {{ background: {t.SURFACE}; }}"
+    )
+
+
 def qss():
     return f"""
 QWidget {{
