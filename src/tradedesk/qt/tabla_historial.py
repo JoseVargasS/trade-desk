@@ -18,10 +18,15 @@ from .formato import cuando, tamano_usdt
 class TablaHistorial:
     """Mixin: pintado de la pestaña Historial."""
 
-    def _pedir_mas_historial(self):
-        """Trae la página siguiente de cada broker (lo ya visto no se pierde)."""
-        self._btn_mas.setEnabled(False)
-        self._btn_mas.setText("Cargando…")
+    def _pedir_mas_historial(self, boton=None):
+        """Trae la página siguiente de cada broker (lo ya visto no se pierde).
+
+        El botón es opcional: el Calendario reutiliza la misma paginación con
+        su propio botón.
+        """
+        boton = boton or self._btn_mas
+        boton.setEnabled(False)
+        boton.setText("Cargando…")
         threading.Thread(target=self.session.cargar_historial, args=(True,), daemon=True).start()
 
     def _pintar_historial(self, filas):

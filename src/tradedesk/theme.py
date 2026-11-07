@@ -42,6 +42,22 @@ R_CARD = 12
 R_CTRL = 8
 R_CHIP = 6
 
+
+# ---------------------------------------------------------------- color util
+def mezclar(color, fondo, alfa):
+    """Mezcla dos colores hex: alfa 0 = fondo, 1 = color."""
+
+    def canales(hexa):
+        limpio = hexa.lstrip("#")
+        return tuple(int(limpio[i : i + 2], 16) for i in (0, 2, 4))
+
+    ahead = canales(color)
+    base = canales(fondo)
+    return "#" + "".join(
+        f"{round(base[i] + (ahead[i] - base[i]) * max(0.0, min(1.0, alfa))):02X}" for i in range(3)
+    )
+
+
 # ------------------------------------------------------------------ tipografia
 FONT_DIR = str(ASSETS / "fonts")
 

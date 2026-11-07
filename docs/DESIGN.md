@@ -58,6 +58,11 @@ Semánticos:
 `ACCENT_SOFT` existe porque un segmento activo del color del input se leía como
 "no seleccionado". No volver a usar `INPUT` para el estado activo.
 
+Para el Calendario, `theme.mezclar(color, fondo, alfa)` mezcla dos hex (la usa `CurvaMes`
+para el relleno de la curva) y el círculo del día de hoy usa `ACCENT_SOFT`. Es la única
+forma de obtener un color nuevo: nada de colores literales en la vista. **No hay fondo de
+color por día**: el PnL se pinta en el número, no en la celda.
+
 ---
 
 ## 3. Tipografía
@@ -105,10 +110,12 @@ tipografía.
 
 | Componente | Archivo | Notas |
 |---|---|---|
-| `VistaQt` | `qt/ventana.py` | arma cabecera, deck, barra de estado y las tres pestañas |
+| `VistaQt` | `qt/ventana.py` | arma cabecera, deck, barra de estado y las cuatro pestañas |
 | pestaña Posiciones | `qt/tabla_posiciones.py` | mixin: filas, resumen bruto/neto y globo de la fee |
 | pestaña Órdenes | `qt/tabla_ordenes.py` | mixin: órdenes abiertas, panel estilo MEXC |
 | pestaña Historial | `qt/tabla_historial.py` | mixin: una fila por operación, con su neto |
+| pestaña Calendario | `qt/calendario.py` | mixin: mes en cuadrícula, métricas del período y detalle del día |
+| `calendario.py` | `calendario.py` | módulo puro: agrega el historial por día, calcula las métricas y arma el CSV |
 | `Tarjeta` | `qt/tarjeta.py` | par + apalancamiento + margen + tamaño (+ chip `Mercado`) + TP/SL + LONG/SHORT |
 | `BarraCierre` | `qt/cierre.py` | precio (Mercado / límite), % de la posición y los dos botones de la fila |
 | `Tarjeta` / `BarraCierre` (formularios) | `forms.py` | parseo puro de lo escrito; nada de widgets |
@@ -223,6 +230,43 @@ Los tres lápices (Monto, Precio y TP/SL) abren el mismo **editor de orden**, co
 Las órdenes de cierre (lado 2/4) no se pueden reenviar: `Modificar` avisa que solo se puede
 cancelar. Las condicionales TP/SL de BingX se muestran y se pueden cancelar, pero no tienen
 lápices ni acción `Modificar` desde esta pestaña. La tabla se actualiza con el poller (cada 3 s).
+
+### Pestaña Calendario
+
+Un mes en cuadrícula con el resultado de cada día. Todo el contenido sale de las mismas
+filas que pinta el Historial: **la pestaña no pide nada a la red**.
+
+El mes es **una tabla** (`QTableWidget` + `DelegadoMes`), no una tarjeta por día: una sola
+superficie `SURFACE` con separadores de pelo en `LINE` y encabezado `Lun Mar…` sobre
+`SURFACE`. Esto es a propósito: 42 cajas con borde se leían como 42 tarjetas sueltas y el
+color de fondo competía con el texto.
+
+| Pieza | Detalle |
+|---|---|
+| Celda del día | número del día (14 px, negrita, `TEXT`; `MUTED` si no tiene operaciones) y debajo su **neto** (13 px, negrita, `GREEN`/`RED`, `theme.fmt_pnl`). El color va **en el número**, nunca en el fondo |
+| Día de hoy | círculo de 11 px de radio en `ACCENT_SOFT` detrás del número (azul, para no confundirse con la semántica verde/rojo del PnL) |
+| Día elegido | tinte de fondo `INPUT`; **hover** en `SURFACE`. El delegado no pinta el resto de la celda: si rellenara todo, taparía los separadores |
+| Fuera de mes | celda vacía (sin número ni importe) |
+| Conteo de operaciones | ya no está en la celda: va al tooltip al pasar el mouse (`04 nov · 7 operaciones · -443.6607`) |
+| Altura | fija: `CAL_ALTO_CABECERA + filas × CAL_ALTO_DIA` (`layout.py`). Si no, el `QScrollArea` estira la tabla y las filas crecen hasta el alto del panel |
+| Tarjeta **Neto del mes** | número grande (18 px, coloreado) + `59 operaciones · 38.98% win rate` + `CurvaMes`, la polilínea de `cal.curva()` (28 px, verde o rojo según el acumulado final, con la línea del cero marcada si la cruza y un punto en el último valor) |
+| Tarjeta **Resumen del mes** | seis filas etiqueta/valor (mejor día, peor día, profit factor, drawdown, rachas, fees), un pelo separador, el desglose por broker (wordmark + cantidad + neto), los totales por semana (enriquecido, verde/rojo) y la nota del funding |
+| Detalle del día | tabla con `CAL_COLS` (`layout.py`): par (con wordmark), lado, entrada, salida, PnL, fee, neto y hora de cierre. Va debajo de la cuadrícula, a lo ancho. Al elegir un día la vista **baja sola** hasta él |
+| Barra | `‹ Mes ›`, `‹ Año ›`, **Hoy**, filtros de broker y par (menús con el mismo estilo del selector de la tarjeta), **Ocultar montos**, **Exportar CSV** y **Cargar más historial** |
+
+- El **neto** es `pnl.neto_operacion(pnl, fee)`: la misma cuenta que la columna Neto del
+  Historial. **No incluye el funding** (la fee del Historial es solo comisión) y la vista lo
+  dice debajo de las métricas.
+- Los **totales por semana** van de lunes a domingo y cuentan solo los días del mes visible.
+- **Ocultar montos** reemplaza los importes por `••••` (también vacía la curva, para que la
+  forma no filtre el monto); el CSV siempre lleva los números reales.
+- El **CSV** sale con `;` como separador y punto decimal, con una fila por operación y una
+  fila `TOTAL` al final. El destino lo elige el usuario (diálogo *Guardar como*).
+- La pestaña vive en un `QScrollArea`: con la ventana de 1800×1000 el área de pestañas queda
+  en ~403 px y el mes (318 px con seis semanas) entra entero. Con un día elegido el detalle
+  cae bajo el pliegue y se baja solo.
+- Los estados **vacío** y **cargando** son en línea (una etiqueta y el `Spinner` de `cells.py`),
+  nunca un modal.
 
 **Editor de orden** (`qt.dialogs.EditorOrden`, 420 px de ancho)
 

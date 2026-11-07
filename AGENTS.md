@@ -67,6 +67,7 @@ documento (AGENTS) describe cómo está el código **hoy**, no cómo debería es
 - **Solo commits y push directo a `main`.** El usuario es el único que maneja el repo: no se
   abren pull requests ni se activa Dependabot, porque ensucian el historial con merges. Las
   actions se actualizan a mano en el mismo commit.
+- **No se crean ramas nuevas**: todo se trabaja y se commitea en `main`.
 
 ---
 
@@ -128,6 +129,20 @@ Decisiones de fondo que **no** están en discusión:
    con el wordmark del broker, lado, **tamaño en USDT**, entrada, salida, PnL, fee, **neto**
    (PnL − fee) y estado (`Cerrada` / `Parcial` / `Abierta`). Los cierres parciales se suman
    en la misma fila en vez de aparecer sueltos.
+10. Pestaña **Calendario**: un mes en cuadrícula con el resultado de cada día. El mes es
+    **una tabla** con separadores de pelo (`Lun Mar…` arriba), no una tarjeta por día: cada
+    celda lleva el número del día y debajo su **neto**, con el color en el número (verde o
+    rojo, `theme.fmt_pnl`); los días sin operaciones quedan neutros y el día de hoy lleva un
+    círculo (`ACCENT_SOFT`). El conteo de operaciones ya no está en la celda: sale en el
+    tooltip al pasar el mouse. Al lado están dos tarjetas: **Neto del mes** (número grande,
+    operaciones y win rate, y la curva acumulada del mes) y **Resumen del mes** (mejor y peor
+    día, profit factor, rachas, drawdown, fees totales, desglose por broker y totales por
+    semana). Al hacer clic en un día se listan sus operaciones abajo (par con wordmark, lado,
+    entrada, salida, PnL, fee, neto y hora) y la vista baja sola hasta el detalle. Se navega
+    por mes y año, hay botón **Hoy**, filtros por broker y por par, un botón para **ocultar
+    los montos** y otro para **exportar el mes a CSV**. La pestaña
+    **no pide nada a la red**: usa las mismas filas del historial (el archivo local fusionado
+    con el broker); «Cargar más historial» reutiliza la paginación del botón *Ver más*.
 
 `DRY-RUN` viene **siempre encendido** en cada arranque y bloquea **abrir, cerrar y reverse**.
 El **TP/SL**, el **margen** y **cancelar órdenes** sí funcionan con DRY-RUN activo: son
@@ -141,7 +156,7 @@ es abrir.
 ```
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
-  src/tradedesk/            (7.498 líneas Python; conteo de referencia al 2026-11-06)
+  src/tradedesk/            (8.514 líneas Python; conteo de referencia al 2026-11-06)
     __init__.py              inicialización del paquete                      2
     __main__.py              arranque: AppUserModelID + vista Qt            14
     paths.py                 DATA_DIR (raíz) y ASSETS (paquete)             10
@@ -152,6 +167,7 @@ raiz/
     pairs.py                 filtro puro del buscador de pares               36
     forms.py                 parseo puro de tarjeta y editor de orden       100
     pnl.py                   neto de una operación del historial              9
+    calendario.py            agregación por día del historial (puro)          298
     archivo.py               operaciones guardadas en disco (upsert)        179
     operaciones.py           empareja órdenes en operaciones (historial)    213
     session.py               pollers, cola, config y caches sin UI          627
@@ -164,10 +180,11 @@ raiz/
       __init__.py           inicialización del paquete                       0
       __main__.py           abre la ventana                                 31
       view.py               fachada: reexporta VistaQt                       6
-      ventana.py            cabecera, deck arrastrable, pestañas, drenaje   556
+      ventana.py            cabecera, deck arrastrable, pestañas, drenaje   565
       tabla_posiciones.py   filas, resumen bruto/neto, globo de la fee     306
       tabla_ordenes.py      órdenes abiertas (panel estilo MEXC)           115
       tabla_historial.py    una fila por operación, con su neto            138
+      calendario.py         mes en cuadrícula, métricas y detalle del día  675
       tarjeta.py            tarjeta de par                                 349
       cierre.py             barra de cierre de la fila (slider, botones)   328
       dialogs.py            fachada: reexporta los diálogos                 40
@@ -182,7 +199,7 @@ raiz/
       cells.py              delegado, celdas con lápiz, spinner, bocadillo 295
       search.py             buscador de pares                               72
       shell.py              ventana de prueba para medir repintado        134
-  tests/                    pytest (217 tests recopilados): lógica, payloads y UI fake
+  tests/                    pytest (240 tests recopilados): lógica, payloads y UI fake
   tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
   scripts/check.bat         lint + formato + tests
   docs/DESIGN.md            sistema de diseno
@@ -191,16 +208,17 @@ raiz/
 
 **El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.** En `main`,
 `controller.py` (1.054) supera el objetivo; queda pendiente separar responsabilidades en un
-cambio dedicado para no mezclar ese refactor con el resto. El siguiente módulo más
-grande es `bingx.py` (607); el mayor de la interfaz es `ventana.py` (540).
-`qt/view.py` y `qt/dialogs.py` quedaron como
+cambio dedicado para no mezclar ese refactor con el resto. El siguiente es
+`qt/calendario.py` (675, el delegado del mes y el resto de la pestaña en un solo archivo: al
+pasar el tope se parte en `qt/calendario_widgets.py`); después `bingx.py` (607) y
+`qt/ventana.py` (565). `qt/view.py` y `qt/dialogs.py` quedaron como
 **fachadas** que reexportan: así los imports de `__main__.py`, `tools/smoke_live.py` y de la
 propia vista no cambiaron. Si un archivo se acerca al tope, se parte igual: módulo nuevo +
 fachada, sin tocar los call sites.
 
-Las tres tablas (`tabla_posiciones`, `tabla_ordenes`, `tabla_historial`) son **mixins** de
-`VistaQt`: usan el estado de la ventana y se pintan igual que antes. Al tocar una tabla,
-recordá que el método vive en el mixin, no en `ventana.py`.
+Las tres tablas (`tabla_posiciones`, `tabla_ordenes`, `tabla_historial`) y la pestaña
+`calendario` son **mixins** de `VistaQt`: usan el estado de la ventana y se pintan igual que
+antes. Al tocar una tabla, recordá que el método vive en el mixin, no en `ventana.py`.
 
 ### Flujo de datos
 
@@ -675,6 +693,48 @@ cantidad exactos de lo que abrió el script.
   fusiona lo que trae el broker con lo archivado y publica el resultado, así que lo que ya
   no existe en el exchange sigue en la tabla. Al arrancar, `Session.__init__` publica el
   archivo de una vez (sin red) y después el refresco agrega lo nuevo.
+- La pestaña **Calendario** agrega esas mismas filas por día (`calendario.py`, puro; la vista
+  vive en `qt/calendario.py` y no calcula nada). Las reglas, que no se deben cambiar sin
+  actualizar los tests:
+  - **Solo cuenta la operación con cierre** (`cierre > 0`): las abiertas no cuentan.
+  - **El día es la fecha local del último cierre** (la del sistema: en la máquina del
+    usuario es America/Lima, UTC-5). Es la misma conversión que usa la columna *Cierre* del
+    Historial, así que el calendario nunca contradice a la tabla. `zoneinfo` no se usa: en
+    Windows sin el paquete `tzdata` no hay base de datos IANA.
+  - **Neto = `pnl.neto_operacion(pnl, fee)`** (PnL − comisión), igual que la columna Neto del
+    Historial. Un rebate (fee negativa) suma. **El neto no incluye el funding**: la fee del
+    Historial es solo comisión, y la vista lo aclara debajo de las métricas.
+  - **Una operación cerrada en partes cuenta entera el día de su último cierre** (limitación
+    conocida: el PnL de una parcial no se reparte entre los días en que se cerró).
+  - **Solo cuenta lo que la app ya cargó**: el calendario no pide nada a la red. El botón
+    *Cargar más historial* reutiliza la paginación del *Ver más* (`session.cargar_historial
+    (mas=True)`), y lo que llega se guarda en `operaciones.json`.
+  - Métricas del mes: **win rate** por operación (netas ganadoras ÷ totales), **profit
+    factor** (Σ netas positivas ÷ |Σ netas negativas|), **rachas** de días **consecutivos de
+    calendario** (un día sin operaciones interrumpe la racha), **drawdown máximo** sobre la
+    curva acumulada diaria (se muestra negativo) y **totales por semana** (lunes a domingo,
+    contando solo los días del mes visible).
+  - El **CSV** sale con `;` como separador y punto decimal (así lo abre Excel en español) y
+    termina en una fila `TOTAL`. El botón *Ocultar montos* reemplaza los importes por `••••`
+    en la vista; el CSV siempre lleva los números reales.
+  - **El mes es una tabla, no 42 tarjetas**: `DelegadoMes` pinta número de día + PnL sobre la
+    superficie `SURFACE` con `gridline-color: LINE`. **Sin fondo de color por día**: el color
+    va en el número del PnL (`GREEN`/`RED`), así que no se mezclan fondos y el día negativo
+    no se lee como error. El delegado **no rellena la celda entera** (si no, tapa los
+    separadores): solo el tinte del día elegido (`INPUT`) y el de hover.
+  - **El día de hoy** lleva un círculo `ACCENT_SOFT` detrás del número, no color de PnL: el
+    verde ya significa ganancia. El **conteo de operaciones** no ocupa la celda (la 3.ª línea
+    era ruido): va al tooltip (`Qt.ToolTipRole`) y al detalle de abajo.
+  - **La altura de la grilla es fija** (`CAL_ALTO_CABECERA + filas × CAL_ALTO_DIA`): sin eso
+    el `QScrollArea` estira la tabla y las filas crecen hasta el alto del panel. El área de
+    pestañas son ~403 px con la ventana de 1000 px, y con dos tarjetas el contenido entra
+    justo (sin scroll). Al elegir un día el detalle cae bajo el pliegue y la vista **baja
+    sola** (`_cal_bajar`, diferido con `singleShot`: el scrollbar todavía no conoce la altura
+    nueva).
+  - El panel son **dos tarjetas**: *Neto del mes* (número grande + operaciones/win rate +
+    `CurvaMes`, la polilínea de `cal.curva()`) y *Resumen del mes* (métricas, brokers con
+    wordmark, semanas y la nota del funding). La curva se pinta en verde o rojo según el
+    acumulado final y marca el cero si lo cruza.
 - El historial viene **paginado** (`HISTORIAL_PAGINA = 50` órdenes por broker): la página 1
   se refresca sola cada 15 s y el botón **Ver más** pide la siguiente de cada broker
   (`mexc.history(size, pagina)` → `page_num`, `bitunix.history(limite, salto)` → `skip`).
@@ -820,8 +880,9 @@ uv run --locked python tools/qt_probe.py
 | `forms.py` (parseo de tarjeta/editor) | `uv run --locked python -m pytest tests/test_forms.py` |
 | `pairs.py`, `qt/search.py` (buscador) | `uv run --locked python -m pytest tests/test_search.py` |
 | `pnl.py` (neto del historial) | `uv run --locked python -m pytest tests/test_pnl.py` |
+| `calendario.py` (agregación por día, métricas, CSV) | `uv run --locked python -m pytest tests/test_calendario.py` |
 | `qt/tabla_historial.py` (actualización incremental) | `uv run --locked python -m pytest tests/test_history_render.py` |
-| `qt/ventana.py`, otras `qt/tabla_*.py`, `qt/cierre.py`, `qt/dialogos_base.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
+| `qt/ventana.py`, otras `qt/tabla_*.py`, `qt/calendario.py`, `qt/cierre.py`, `qt/dialogos_base.py` (widgets) | nada automático: `python tools/smoke_live.py 9` + captura de la zona tocada |
 | `__main__.py`, `app.py` (arranque) | `uv run --locked python -m pytest tests/test_launcher.py` |
 | docs, comentarios, README | nada |
 

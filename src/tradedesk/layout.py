@@ -41,8 +41,25 @@ OPER_COLS = (
 
 STATES = {1: "Pendiente", 2: "Sin llenar", 3: "Ejecutada", 4: "Cancelada", 5: "Invalida"}
 
+# Detalle de un día en la pestaña Calendario
+CAL_COLS = (
+    ("par", "Par", 160, "w"),
+    ("lado", "Lado", 74, "w"),
+    ("entrada", "Entrada", 110, "e"),
+    ("salida", "Salida", 110, "e"),
+    ("pnl", "PnL", 118, "e"),
+    ("fee", "Fee", 104, "e"),
+    ("neto", "Neto", 118, "e"),
+    ("hora", "Hora", 90, "w"),
+)
+
 ROW_H = 56
 ACTION_W = 200
+
+# Pestaña Calendario: alto de cada día del mes y ancho del panel de métricas
+CAL_ALTO_DIA = 48
+CAL_PANEL_W = 350
+CAL_ALTO_CABECERA = 26
 
 # ------------------------------------------------------------------ ordenes
 ORDER_COLS = (

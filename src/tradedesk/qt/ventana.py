@@ -33,6 +33,7 @@ from ..layout import OPER_COLS, POS_COLS
 from ..paths import ASSETS
 from ..session import Session
 from . import dialogs
+from .calendario import PestanaCalendario
 from .cells import Bocadillo, Spinner, tabla
 from .dialogs import QtPort
 from .search import buscar
@@ -47,13 +48,14 @@ from .tarjeta import Tarjeta
 BROKERS = NOMBRES
 
 
-class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
+class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Trade Desk")
         self.resize(1800, 1000)
         self._posiciones = []
         self._ordenes = []
+        self._historial_filas = []
         self._tarjetas = {}
         self._ultimo_error = ""
         self._error_hasta = 0.0
@@ -422,11 +424,14 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
         self._tabla_hist = tabla(OPER_COLS, 38)
         col_hist.addWidget(self._tabla_hist, 1)
         self._tabs.addTab(historial, "Historial")
+        self._tabs.addTab(self._armar_calendario(), "Calendario")
         self._tabs.currentChanged.connect(self._cambio_pestana)
         return self._tabs
 
     def _cambio_pestana(self, indice):
-        visible = self._tabs.tabText(indice) == "Historial"
+        # el Historial y el Calendario comen del mismo historial: si uno está
+        # visible, el otro tiene que seguir recibiéndolo
+        visible = self._tabs.tabText(indice) in ("Historial", "Calendario")
         self.session.ver_historial = visible
         if visible:
             threading.Thread(target=self.session.cargar_historial, daemon=True).start()
@@ -467,11 +472,14 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
             elif tipo == "order":
                 self._orden_terminada(*mensaje[1])
             elif tipo == "history":
+                self._historial_filas = mensaje[1]
                 self._pintar_historial(mensaje[1])
+                self._pintar_calendario(mensaje[1])
             elif tipo == "history_mas":
                 self._hay_mas_hist = bool(mensaje[1])
                 self._btn_mas.setEnabled(self._hay_mas_hist and not self._hist_cargando)
                 self._btn_mas.setText("Ver más" if self._hay_mas_hist else "Sin más")
+                self._cal_estado_historial(self._hist_cargando, self._hay_mas_hist)
             elif tipo == "history_cargando":
                 cargando = bool(mensaje[1])
                 self._hist_cargando = cargando
@@ -484,6 +492,7 @@ class VistaQt(TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
                 self._btn_mas.setText(
                     "Cargando…" if cargando else ("Ver más" if self._hay_mas_hist else "Sin más")
                 )
+                self._cal_estado_historial(cargando, self._hay_mas_hist)
             elif tipo == "ip":
                 datos = mensaje[1] if isinstance(mensaje[1], dict) else {"v4": mensaje[1]}
                 self._ip = datos
