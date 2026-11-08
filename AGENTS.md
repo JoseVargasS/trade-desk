@@ -96,7 +96,9 @@ Decisiones de fondo que **no** están en discusión:
 ## 2. Cómo lo usa el usuario (flujo real)
 
 1. Abre `Trade Desk` (acceso directo del escritorio). Arranca **sin tarjetas**.
-2. `+ Añadir par` → buscador modal → escribe (`btc`, `sol`) → `Enter` toma el primero.
+2. `+ Añadir par` → buscador modal de **futuros** → escribe (`btc`, `sol`) → `Enter` toma
+   el primero. El catálogo viene de MEXC Futures, Bitunix Futures y BingX Swap; spot no está
+   incluido.
 3. Configura apalancamiento (entry o presets 1/5/10/15/20/50), margen (Aislado por defecto),
    modo de tamaño (Margen o Nocional) y escribe el **tamaño en USDT** (vacío por defecto).
 4. Opcional: TP y SL.
@@ -230,9 +232,9 @@ de red y los resultados de acciones publican mensajes; la UI los procesa en `_dr
 
 ```
 _cargar_tarjetas ─► contratos/precios iniciales y saldos
-_cargar_catalogo ─► ("markets", ...)              catálogo MEXC + pares extra Bitunix
+_cargar_catalogo ─► ("markets", ...), disponibilidad por broker (solo futuros)
 _cargar_ip       ─► ("ip", ...)                   IP inicial
-_poll(broker)    ─► ("ticker", ...)               un hilo por broker, 0,70 s entre requests
+_poll(broker)    ─► ("ticker", ...)               un hilo por broker, rota tarjetas cada 0,70 s
 _poll_cuenta     ─► ("positions", ...), ("orders", ...) cada 3 s en estado normal
 _poll_secundario ─► historial (15 s, solo en su pestaña), saldos (15 s),
                     funding (60 s) e IP (900 s); tareas secuenciales en este worker
@@ -242,6 +244,10 @@ Cada broker tiene su propio hilo de precios (`_poll("mexc")`, `_poll("bitunix")`
 `_poll("bingx")`), así que una consulta colgada o un backoff afectan solo a ese broker
 y no congelan los precios de los demás. Dentro de `_poll_cuenta`, posiciones y órdenes se
 consultan en secuencia; dentro de `_poll_secundario`, historial, saldos, funding e IP también.
+Los tickers son públicos: `_poll` usa el cliente de mercado aunque no haya API key. `Session.cliente()`
+sigue reservado para operaciones privadas que requieren credenciales.
+El índice de `_poll` persiste entre vueltas para que cada tarjeta del broker reciba su ticker;
+reordenar una copia recién creada de la lista no rota entre tarjetas.
 Ticker y cuenta aplican backoff si fallan (tope de 5 s). No describas al worker secundario
 como cuatro hilos separados. `Session.start()` conserva las referencias a los workers daemon;
 `stop()` señala el evento de cierre.
@@ -644,7 +650,10 @@ cantidad exactos de lo que abrió el script.
   operar`, con `LONG`/`SHORT` apagados. La elección se guarda por tarjeta en `config.json`
   (`exchange`); las tarjetas viejas sin ese campo se asumen de MEXC. Cambiar de broker **no
   republica** el deck (borraría el tamaño escrito): el contrato se pide al cliente nuevo y
-  el precio llega con el siguiente ticker.
+  el precio llega con el siguiente ticker. El menú marca Disponible, Verificando o No
+  disponible según los catálogos de futuros; un par no disponible queda deshabilitado y
+  cambiar de broker invalida el precio anterior. Si el catálogo no responde, LONG/SHORT
+  permanecen deshabilitados hasta poder verificarlo.
 - **El deck reusa las tarjetas**: `_pintar_deck` crea solo la nueva y destruye solo la que
   se quitó (antes borraba y recreaba todas, y al añadir un par se perdía lo escrito en el
   tamaño, TP, SL y apalancamiento de las demás cajas).
@@ -665,8 +674,9 @@ cantidad exactos de lo que abrió el script.
   el `QDrag` mostraba una copia flotante con la original quieta.
 - **Cada tarjeta tiene un `id`** (`BTC_USDT`, `BTC_USDT#2`, …), así el mismo par puede estar
   en los dos brokers a la vez. El precio se cachea por `id`, no por símbolo, y el ticker
-  publica `("ticker", id, precio, cambio)`. El buscador suma al catálogo de MEXC los pares
-  que solo tiene Bitunix (se guardan con el símbolo de MEXC y cada módulo lo convierte).
+  publica `("ticker", id, broker, precio, cambio)`; descarta resultados de un broker que
+  dejó de estar seleccionado. El buscador combina catálogos de futuros; el selector indica
+  disponibilidad por broker y no convierte símbolos alternativos automáticamente.
 - La cabecera muestra el **USDT disponible de cada broker** con su **wordmark** (`logo(nombre,
   13, completo=True)`), el número y el `USDT` en 13 px **negrita**, separados por
   un `·`; cada 15 s. La lista sale de `BROKERS` y `TITULOS` en `qt/ventana.py`, así sumar un broker

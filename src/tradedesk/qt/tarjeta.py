@@ -35,7 +35,14 @@ class Tarjeta(QFrame):
     """Una tarjeta de par: apalancamiento, tamaño, TP/SL y el resumen vivo."""
 
     def __init__(
-        self, tarjeta, clientes, on_trade=None, on_remove=None, on_broker=None, on_arrastre=None
+        self,
+        tarjeta,
+        clientes,
+        on_trade=None,
+        on_remove=None,
+        on_broker=None,
+        on_arrastre=None,
+        estado_mercado=None,
     ):
         super().__init__()
         self.tarjeta = tarjeta
@@ -44,6 +51,7 @@ class Tarjeta(QFrame):
         self.on_remove = on_remove or (lambda _s: None)
         self.on_broker = on_broker or (lambda _c, _n: None)
         self.on_arrastre = on_arrastre or (lambda _c, _a, _p=None: None)
+        self.estado_mercado = estado_mercado or (lambda _b, _s: None)
         self.limite = 0.0
         self._presets = {}
         self._ocupado = False
@@ -272,9 +280,27 @@ class Tarjeta(QFrame):
         acciones = {}
         for nombre in NOMBRES:
             titulo = TITULOS[nombre]
+            estado = self.estado_mercado(nombre, self.tarjeta["symbol"])
+            if estado is False:
+                titulo += " (No disponible)"
+            elif estado is None:
+                titulo += " (Verificando)"
+            else:
+                titulo += " (Disponible)"
             accion = menu.addAction(QIcon(logo(nombre, 14)), titulo)
             accion.setCheckable(True)
             accion.setChecked(nombre == actual)
+            accion.setEnabled(estado is not False)
+            accion.setToolTip(
+                f"{self.tarjeta['symbol']}: "
+                + (
+                    "no aparece en el catálogo de futuros de este broker."
+                    if estado is False
+                    else "selecciona solo tras verificar el catálogo de futuros."
+                    if estado is None
+                    else "contrato de futuros disponible."
+                )
+            )
             acciones[accion] = nombre
         elegido = menu.exec(self.btn_broker.mapToGlobal(self.btn_broker.rect().bottomLeft()))
         if elegido not in acciones:
@@ -283,6 +309,10 @@ class Tarjeta(QFrame):
         if nombre == actual:
             return
         self.tarjeta["exchange"] = nombre
+        self.tarjeta["precio"] = 0.0
+        self.limite = 0.0
+        self.lbl_precio.setText("—")
+        self.lbl_cambio.setText("")
         self._pintar_broker()
         self.on_broker(self, nombre)
         self._actualizar()
@@ -290,11 +320,16 @@ class Tarjeta(QFrame):
     def set_precio(self, precio, cambio=0.0):
         """Precio y variación del ticker: se actualiza sin pedir nada a la red."""
         self.tarjeta["precio"] = float(precio or 0)
-        self.lbl_precio.setText(t.fmt_price(self.tarjeta["precio"]))
+        self.lbl_precio.setText(
+            t.fmt_price(self.tarjeta["precio"]) if self.tarjeta["precio"] > 0 else "—"
+        )
         self.lbl_cambio.setText(t.fmt_pct(cambio))
         self.lbl_cambio.setStyleSheet(
             f"color: {t.GREEN if cambio >= 0 else t.RED}; background: transparent;"
         )
+        self._actualizar()
+
+    def refrescar_estado_mercado(self):
         self._actualizar()
 
     def _menu_limite(self):
@@ -329,17 +364,44 @@ class Tarjeta(QFrame):
     def _actualizar(self):
         exchange = self.broker()
         cliente = self.clientes.get(exchange) if exchange else None
+        estado = self.estado_mercado(exchange, self.tarjeta["symbol"]) if exchange else None
         self._marcar_presets()
-        if cliente is None:
+        if not exchange:
             self.lbl_precio.setText("—")
             self.lbl_cambio.setText("")
-            self.lbl_resumen.setText(
-                "Elige un broker para operar" if not exchange else f"Falta la key de {exchange}"
-            )
+            self.lbl_resumen.setText("Elige un broker para operar")
             self.btn_long.setEnabled(False)
             self.btn_short.setEnabled(False)
             return
-        self.lbl_precio.setText(t.fmt_price(self.tarjeta["precio"]))
+        if estado is False:
+            self.lbl_precio.setText("—")
+            self.lbl_cambio.setText("")
+            self.lbl_resumen.setText("Par no disponible en los futuros de este broker")
+            self.btn_long.setEnabled(False)
+            self.btn_short.setEnabled(False)
+            return
+        if cliente is None:
+            self.lbl_precio.setText("—")
+            self.lbl_cambio.setText("")
+            self.lbl_resumen.setText(f"Falta la key de {exchange}")
+            self.btn_long.setEnabled(False)
+            self.btn_short.setEnabled(False)
+            return
+        if estado is None:
+            self.lbl_precio.setText("—")
+            self.lbl_cambio.setText("")
+            self.lbl_resumen.setText("Verificando contrato de futuros…")
+            self.btn_long.setEnabled(False)
+            self.btn_short.setEnabled(False)
+            return
+        precio_actual = float(self.tarjeta.get("precio") or 0)
+        if precio_actual <= 0:
+            self.lbl_precio.setText("—")
+            self.lbl_resumen.setText("Esperando precio del broker…")
+            self.btn_long.setEnabled(False)
+            self.btn_short.setEnabled(False)
+            return
+        self.lbl_precio.setText(t.fmt_price(precio_actual))
         self.btn_long.setEnabled(not self._ocupado)
         self.btn_short.setEnabled(not self._ocupado)
         try:
@@ -350,7 +412,7 @@ class Tarjeta(QFrame):
             tamano = float(self.in_tamano.text().replace(",", "") or 0)
         except ValueError:
             tamano = 0.0
-        precio = self.limite or float(self.tarjeta["precio"] or 0)
+        precio = self.limite or precio_actual
         nocional = tamano * palanca if self.tarjeta["size_mode"] == "Margen" else tamano
         if not (nocional and precio):
             self.lbl_resumen.setText(PISTAS)

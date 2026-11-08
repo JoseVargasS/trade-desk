@@ -62,6 +62,7 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
         self._fondos = {}
         self._saldos = {}
         self._ip = {}
+        self._disponibilidad_mercado = {}
         self._hay_mas_hist = True
         self._caja_saldos = None
         self._firma_pos = ()
@@ -453,6 +454,11 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
                 self._pintar_deck(mensaje[1])
             elif tipo == "ticker":
                 self._actualizar_precio(*mensaje[1:])
+            elif tipo == "market_availability":
+                _, exchange, simbolos = mensaje
+                self._disponibilidad_mercado[exchange] = simbolos
+                for tarjeta in self._tarjetas.values():
+                    tarjeta.refrescar_estado_mercado()
             elif tipo == "balances":
                 self._pintar_saldos(mensaje[1])
             elif tipo == "funding":
@@ -548,11 +554,18 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
 
         self.control.abrir(side, form, al_enviar=enviar, exchange=tarjeta.broker())
 
-    def _actualizar_precio(self, ident, precio, cambio=0.0):
+    def _actualizar_precio(self, ident, exchange, precio, cambio=0.0):
         tarjeta = self._tarjetas.get(ident)
-        if tarjeta is not None:
+        if tarjeta is not None and tarjeta.broker() == exchange:
             tarjeta.set_precio(precio, cambio)
-        self._mostrar_estado(f"{len(self._posiciones)} posiciones abiertas")
+            self._mostrar_estado(f"{len(self._posiciones)} posiciones abiertas")
+
+    def _estado_mercado(self, exchange, symbol):
+        mercados = self._disponibilidad_mercado.get(exchange)
+        if mercados is None:
+            return None
+        clave = str(symbol or "").replace("_", "").replace("-", "").upper()
+        return clave in mercados
 
     def showEvent(self, evento):
         super().showEvent(evento)
@@ -586,6 +599,7 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
                     on_remove=self._quitar_par,
                     on_broker=self._cambio_broker,
                     on_arrastre=self._arrastre_tarjeta,
+                    estado_mercado=self._estado_mercado,
                 )
                 widget.setParent(self._lienzo)
                 widget.show()

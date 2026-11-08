@@ -6,16 +6,17 @@ from tradedesk.session import Session
 
 
 class StopAfterWait:
-    def __init__(self):
+    def __init__(self, after=1):
         self.stopped = False
         self.delays = []
+        self.after = after
 
     def is_set(self):
         return self.stopped
 
     def wait(self, delay):
         self.delays.append(delay)
-        self.stopped = True
+        self.stopped = len(self.delays) >= self.after
         return True
 
 
@@ -36,14 +37,14 @@ def test_poller_de_ticker_no_consulta_posiciones_ni_ordenes():
         def ticker(self, _symbol):
             return {"lastPrice": 100, "riseFallRate": 0.01}
 
-    app.cliente = lambda _exchange: Cliente()
+    app.mx = Cliente()
     app.posiciones_todas = lambda: (_ for _ in ()).throw(AssertionError("cuenta en ticker"))
     app.ordenes_todas = app.posiciones_todas
 
     app._poll("mexc")
 
     assert app.precios == {"BTC_USDT": 100}
-    assert app.q.get_nowait() == ("ticker", "BTC_USDT", 100, 1)
+    assert app.q.get_nowait() == ("ticker", "BTC_USDT", "mexc", 100, 1)
 
 
 def test_poller_solo_mira_las_tarjetas_de_su_broker():
@@ -58,12 +59,57 @@ def test_poller_solo_mira_las_tarjetas_de_su_broker():
         def ticker(self, symbol):
             return {"lastPrice": 100, "riseFallRate": 0.01}
 
-    app.cliente = lambda exchange: Cliente() if exchange == "mexc" else None
+    app.mx = Cliente()
+    app.bitunix = Cliente()
 
     app._poll("mexc")
 
     assert set(app.precios) == {"BTC_USDT"}
-    assert app.q.get_nowait() == ("ticker", "BTC_USDT", 100, 1)
+    assert app.q.get_nowait() == ("ticker", "BTC_USDT", "mexc", 100, 1)
+
+
+def test_poller_rota_entre_todas_las_tarjetas_del_mismo_broker():
+    app = _session()
+    app._parar = StopAfterWait(after=2)
+    app.tarjetas = [
+        {"symbol": "BTC_USDT", "id": "BTC_USDT", "exchange": "bitunix"},
+        {"symbol": "XAU_USDT", "id": "XAU_USDT", "exchange": "bitunix"},
+    ]
+    app.precios = {}
+
+    class Cliente:
+        def ticker(self, symbol):
+            return {"lastPrice": 100 if symbol == "BTC_USDT" else 4000, "open": 100}
+
+    app.bitunix = Cliente()
+
+    app._poll("bitunix")
+
+    eventos = [app.q.get_nowait(), app.q.get_nowait()]
+    assert [evento[1] for evento in eventos] == ["BTC_USDT", "XAU_USDT"]
+    assert app.precios == {"BTC_USDT": 100, "XAU_USDT": 4000}
+
+
+def test_ticker_publico_de_bitunix_no_requiere_clave_api():
+    app = _session()
+    app.tarjetas = [{"symbol": "XAU_USDT", "id": "XAU_USDT", "exchange": "bitunix"}]
+    app.precios = {}
+
+    class Cliente:
+        def ticker(self, symbol):
+            assert symbol == "XAU_USDT"
+            return {"lastPrice": "4072.8", "open": "4081.0"}
+
+    app.bitunix = Cliente()
+    app.hay = {"bitunix": False}
+    app.cliente = lambda _exchange: None
+
+    app._poll("bitunix")
+
+    assert app.precios == {"XAU_USDT": 4072.8}
+    evento = app.q.get_nowait()
+    assert evento[:4] == ("ticker", "XAU_USDT", "bitunix", 4072.8)
+    assert abs(evento[4] + 0.20093) < 1e-4
 
 
 def test_un_broker_colgado_no_congela_los_precios_de_los_demas():
@@ -88,7 +134,8 @@ def test_un_broker_colgado_no_congela_los_precios_de_los_demas():
         {"symbol": "BTC_USDT", "id": "BTC_USDT", "exchange": "mexc"},
         {"symbol": "BTC_USDT", "id": "BTC_USDT#2", "exchange": "bitunix"},
     ]
-    app.cliente = lambda exchange: Colgado() if exchange == "mexc" else Vivo()
+    app.mx = Colgado()
+    app.bitunix = Vivo()
 
     hilos = [
         threading.Thread(target=app._poll, args=("mexc",), daemon=True),
@@ -98,13 +145,85 @@ def test_un_broker_colgado_no_congela_los_precios_de_los_demas():
         hilo.start()
     try:
         # el unico precio que llega es el de Bitunix, con MEXC todavia colgado
-        assert app.q.get(timeout=5.0) == ("ticker", "BTC_USDT#2", 55, 10.0)
+        assert app.q.get(timeout=5.0) == ("ticker", "BTC_USDT#2", "bitunix", 55, 10.0)
         assert set(app.precios) == {"BTC_USDT#2"}
     finally:
         parado.set()
         app._parar.set()
         for hilo in hilos:
             hilo.join(timeout=5.0)
+
+
+def test_catalogo_publica_disponibilidad_de_futuros_sin_claves():
+    app = _session()
+    app.mercados = {}
+
+    class MexcCatalogo:
+        def markets(self):
+            return {"XAU_USDT": {}, "BTC_USDT": {}}
+
+    class BitunixCatalogo:
+        def trading_pairs(self):
+            return [
+                {"symbol": "XAUUSDT", "symbolStatus": "OPEN", "isApiSupported": True},
+                {"symbol": "CLOSEDUSDT", "symbolStatus": "CLOSED", "isApiSupported": True},
+                {"symbol": "NOAPIUSDT", "symbolStatus": "OPEN", "isApiSupported": False},
+            ]
+
+    class BingxCatalogo:
+        def contracts(self):
+            return [
+                {"symbol": "XAUT-USDT", "status": 1, "apiStateOpen": "true"},
+                {"symbol": "PAXG-USDT", "status": 1, "apiStateOpen": "true"},
+                {"symbol": "XAU-USDT", "status": 25, "apiStateOpen": "true"},
+            ]
+
+    app.mx = MexcCatalogo()
+    app.bitunix = BitunixCatalogo()
+    app.bingx = BingxCatalogo()
+
+    app._cargar_catalogo()
+
+    disponibilidad = {}
+    while not app.q.empty():
+        mensaje = app.q.get_nowait()
+        if mensaje[0] == "market_availability":
+            disponibilidad[mensaje[1]] = mensaje[2]
+    assert disponibilidad == {
+        "mexc": {"XAUUSDT", "BTCUSDT"},
+        "bitunix": {"XAUUSDT"},
+        "bingx": {"XAUTUSDT", "PAXGUSDT"},
+    }
+
+
+def test_cambio_de_broker_descarta_un_ticker_que_quedo_en_vuelo():
+    app = _session()
+    app.tarjetas = [{"symbol": "XAU_USDT", "id": "XAU_USDT", "exchange": "mexc"}]
+    app.precios = {"XAU_USDT": 4072.8}
+
+    class Cliente:
+        def ticker(self, _symbol):
+            app.tarjetas[0]["exchange"] = "bingx"
+            return {"lastPrice": 4072.8, "riseFallRate": 0.01}
+
+    app.mx = Cliente()
+
+    app._poll("mexc")
+
+    assert app.precios == {"XAU_USDT": 4072.8}
+    assert app.q.empty()
+
+
+def test_cambiar_broker_invalida_el_precio_cacheado():
+    app = _session()
+    app.tarjetas = [{"symbol": "XAU_USDT", "id": "XAU_USDT", "exchange": "mexc"}]
+    app.precios = {"XAU_USDT": 4072.8}
+    app._guardar_config = lambda: None
+
+    app.set_exchange("XAU_USDT", "bitunix")
+
+    assert app.tarjetas[0]["exchange"] == "bitunix"
+    assert "XAU_USDT" not in app.precios
 
 
 def test_poller_de_cuenta_actualiza_posiciones_y_ordenes_en_ciclo_aparte():

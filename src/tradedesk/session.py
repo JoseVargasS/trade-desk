@@ -36,6 +36,14 @@ HISTORIAL_PAGINA = 50
 FONDOS_SEG = 60.0
 
 
+def _clave_mercado(symbol):
+    return str(symbol or "").replace("_", "").replace("-", "").upper()
+
+
+def _es_true(value):
+    return value is True or str(value).lower() in ("1", "true")
+
+
 class Session:
     def __init__(self, mx=None, bitunix=None, bingx=None):
         self.mx = mx or Mexc(*creds.load("mexc"))
@@ -119,6 +127,7 @@ class Session:
             for tarjeta in self.tarjetas:
                 if tarjeta["id"] == tarjeta_id:
                     tarjeta["exchange"] = exchange
+                    self.precios.pop(tarjeta_id, None)
         self._guardar_config()
 
     def add_card(self, symbol):
@@ -532,18 +541,24 @@ class Session:
         self.q.put(("ip", datos))
 
     def _cargar_catalogo(self):
-        """Catálogo completo del buscador: MEXC y, si hay claves, Bitunix."""
+        """Carga los catálogos de futuros y publica qué pares admite cada broker."""
         try:
             self.mercados = self.mx.markets()
+            disponibles = {_clave_mercado(symbol) for symbol in self.mercados}
+            self.q.put(("market_availability", "mexc", disponibles))
             self.q.put(("markets", self.mercados))
         except Exception as exc:
             self.q.put(("error", f"catalogo: {exc}"))
-        cliente = self.cliente("bitunix")
-        if cliente is None:
-            return
         try:
             extra = 0
-            for par in cliente.trading_pairs():
+            pares = self.bitunix.trading_pairs()
+            disponibles = {
+                _clave_mercado(par.get("symbol"))
+                for par in pares
+                if par.get("symbolStatus") == "OPEN" and _es_true(par.get("isApiSupported"))
+            }
+            self.q.put(("market_availability", "bitunix", disponibles))
+            for par in pares:
                 simbolo = con_guion(par.get("symbol"))
                 if not simbolo or simbolo in self.mercados:
                     continue
@@ -560,12 +575,16 @@ class Session:
                 self.q.put(("status", f"Catálogo: {extra} pares extra de Bitunix"))
         except Exception as exc:
             self.q.put(("error", f"catalogo bitunix: {exc}"))
-        cliente = self.cliente("bingx")
-        if cliente is None:
-            return
         try:
             extra = 0
-            for par in cliente.contracts():
+            pares = self.bingx.contracts()
+            disponibles = {
+                _clave_mercado(par.get("symbol"))
+                for par in pares
+                if str(par.get("status")) == "1" and _es_true(par.get("apiStateOpen"))
+            }
+            self.q.put(("market_availability", "bingx", disponibles))
+            for par in pares:
                 symbol = str(par.get("symbol") or "")
                 if not symbol.upper().endswith("-USDT"):
                     continue
@@ -594,14 +613,14 @@ class Session:
         brokers, y el backoff del que fallaba frenaba tambien a los demas.
         """
         espera = TICKER_SEG
+        indice = 0
         while not self._parar.is_set():
             fallo = False
             tarjetas = self._tarjetas_de(exchange)
             if tarjetas:
-                # round-robin entre las tarjetas de este broker
-                tarjeta = tarjetas.pop(0)
-                tarjetas.append(tarjeta)
-                cliente = self.cliente(exchange)
+                tarjeta = tarjetas[indice % len(tarjetas)]
+                indice += 1
+                cliente = getattr(self, "mx" if exchange == "mexc" else exchange, None)
                 if cliente is not None:
                     try:
                         datos = cliente.ticker(tarjeta["symbol"]) or {}
@@ -612,8 +631,16 @@ class Session:
                         else:
                             cambio = float(datos.get("riseFallRate") or 0) * 100
                         if precio:
-                            self.precios[tarjeta["id"]] = precio
-                            self.q.put(("ticker", tarjeta["id"], precio, cambio))
+                            with self._candado_tarjetas:
+                                sigue_seleccionado = any(
+                                    actual["id"] == tarjeta["id"]
+                                    and (actual.get("exchange") or "") == exchange
+                                    for actual in self.tarjetas
+                                )
+                                if sigue_seleccionado:
+                                    self.precios[tarjeta["id"]] = precio
+                            if sigue_seleccionado:
+                                self.q.put(("ticker", tarjeta["id"], exchange, precio, cambio))
                     except Exception as exc:
                         fallo = True
                         self.q.put(("error", f"precio {tarjeta['symbol']}: {exc}"))
