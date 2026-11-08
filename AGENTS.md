@@ -264,6 +264,12 @@ historial (~3 meses): sin esto, lo viejo desaparece de la pestaña. Antes de gua
 `operaciones.json.bak` y el archivo principal se reemplaza atómicamente. Si el JSON está
 corrupto, se pone en cuarentena y se intenta recuperar el respaldo; la vista recibe un aviso
 explícito. Al arrancar se pinta lo guardado antes de tocar la red (`docs/PLAN.md` §3.2 y §3.3).
+Al fusionar, una fila `cierre|` solo se quita si coincide de forma única con una `fifo|`
+por broker, símbolo, lado, cierre (menos de 1 s), cantidad cerrada, PnL y salida. Matches
+ambiguos o incompletos se conservan; por eso una posible duplicación sin evidencia
+suficiente puede seguir visible. Es una heurística basada en esos campos, no una identidad
+de orden: dos operaciones legítimas idénticas dentro de ese intervalo aún podrían coincidir.
+Un refresco MEXC menos completo tampoco reemplaza una fila archivada mejor.
 
 `trades.log` registra cada intento: hora, resultado, `orderId`, símbolo, `vol`. Nunca la key.
 Rota al alcanzar 1 MB y conserva hasta tres copias; los errores de escritura se notifican
@@ -744,9 +750,9 @@ cantidad exactos de lo que abrió el script.
   se refresca sola cada 15 s y el botón **Ver más** pide la siguiente de cada broker
   (`mexc.history(size, pagina)` → `page_num`, `bitunix.history(limite, salto)` → `skip`).
   Las órdenes se acumulan en `Session._hist_ordenes` con clave `(broker, orderId)`, así el
-  refresco **fusiona** (no borra ni duplica) y `history_mas` apaga el botón cuando un broker
-  devuelve menos de 50. Con una página sola se veían ~1 mes de operaciones: por eso "llegaba
-  hasta setiembre".
+  refresco actualiza los campos de una orden ya vista y `history_mas` apaga el botón cuando
+  un broker devuelve menos de 50. Con una página sola se veían ~1 mes de operaciones: por
+  eso "llegaba hasta setiembre".
 - **Paginación (trampa resuelta)**: el refresco automático pide siempre la **página 1** y
   **no** reinicia `_hist_pagina` (antes lo hacía y `Ver más` volvía a pedir la misma página:
   parecía que no traía nada). Un candado (`_hist_candado`) descarta la carga que llegue
@@ -846,6 +852,11 @@ cantidad exactos de lo que abrió el script.
     `qt/style.cargar_fuentes()` los registra con `QFontDatabase.addApplicationFont` y
     `app.setFont` deja la familia de base; se comprueba con
     `QFontInfo(w.font()).family() == "Geist"`.
+16. **El historial podía duplicar o perder datos al refrescar**: la caché actualiza la
+    última versión de cada `(broker, orderId)`. El archivo local solo reconcilia cierres
+    Bitunix con filas FIFO cuando la coincidencia es uno-a-uno y coincide en cantidad,
+    PnL, precio de salida y tiempo; conserva los casos ambiguos. Para MEXC, un refresco con
+    menos datos no pisa la fila archivada más completa.
 
 **Cómo diagnosticar un bloqueo de UI:** `perf.log` sigue siendo el registro histórico de la
 app Tk; en Qt, un modal abierto dentro de `_drenar` volvería a congelar el refresco, así que

@@ -120,6 +120,48 @@ def test_poller_de_cuenta_actualiza_posiciones_y_ordenes_en_ciclo_aparte():
     assert app.q.get_nowait() == ("orders", [{"orderId": "123"}])
 
 
+def test_cargar_historial_actualiza_una_orden_ya_vista(monkeypatch):
+    existente = {
+        "_exchange": "mexc",
+        "orderId": "1",
+        "positionId": "7",
+        "symbol": "BTC_USDT",
+        "side": 1,
+        "dealVol": 1,
+        "dealAvgPrice": 100,
+        "totalFee": 0.1,
+        "createTime": 1000,
+    }
+    reciente = {**existente, "totalFee": 0.2}
+
+    class Cliente:
+        def history(self, _limite, _pagina):
+            return [reciente]
+
+    class Archivo:
+        def fusionar(self, filas):
+            self.filas = filas
+            return filas
+
+    app = _session()
+    app.mx = Cliente()
+    app.bitunix = object()
+    app.bingx = object()
+    app.cliente = lambda exchange: app.mx if exchange == "mexc" else None
+    app._hist_candado = threading.Lock()
+    app._hist_pagina = 0
+    app._hist_ordenes = {("mexc", "1"): existente}
+    app.historial_hay_mas = {"mexc": True, "bitunix": False, "bingx": False}
+    app.archivo = Archivo()
+    app._publicar_estado_archivo = lambda: None
+    monkeypatch.setattr(session_module, "decorate_orders", lambda _mx, filas: filas)
+
+    app.cargar_historial()
+
+    assert app._hist_ordenes[("mexc", "1")]["totalFee"] == 0.2
+    assert app.archivo.filas[0]["fee"] == 0.2
+
+
 def test_fallo_de_cuenta_aplica_backoff_sin_retrasar_ticker():
     app = _session()
     app.posiciones_todas = lambda: (_ for _ in ()).throw(RuntimeError("sin conexión"))

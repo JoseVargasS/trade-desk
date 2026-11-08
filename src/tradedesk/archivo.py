@@ -7,6 +7,7 @@ Historial sigue mostrando lo viejo aunque el exchange ya no lo devuelva.
 """
 
 import json
+import math
 import os
 import shutil
 from datetime import datetime
@@ -152,6 +153,92 @@ class Archivo:
                 True,
             )
 
+    @staticmethod
+    def _numero(fila, campo):
+        try:
+            return float(fila.get(campo) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def _es_cierre_huerfano_duplicado(cls, cierre, fifo):
+        if not str(cierre.get("_clave") or "").startswith("cierre|"):
+            return False
+        if not str(fifo.get("_clave") or "").startswith("fifo|"):
+            return False
+        if any(cierre.get(campo) != fifo.get(campo) for campo in ("_exchange", "symbol", "lado")):
+            return False
+        ms_cierre = cls._numero(cierre, "cierre")
+        ms_fifo = cls._numero(fifo, "cierre")
+        if ms_cierre <= 0 or ms_fifo <= 0 or abs(ms_cierre - ms_fifo) >= 1000:
+            return False
+        cerrada = cls._numero(cierre, "cerrada")
+        salida = cls._numero(cierre, "salida")
+        if cerrada <= 0 or salida <= 0:
+            return False
+        if not math.isclose(
+            cerrada,
+            cls._numero(fifo, "cerrada"),
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            return False
+        if not math.isclose(
+            cls._numero(cierre, "pnl"),
+            cls._numero(fifo, "pnl"),
+            rel_tol=1e-9,
+            abs_tol=1e-10,
+        ):
+            return False
+        return math.isclose(
+            salida,
+            cls._numero(fifo, "salida"),
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        )
+
+    @classmethod
+    def _menos_completa(cls, nueva, anterior):
+        es_posicion_mexc = nueva.get("_exchange") == "mexc" and str(
+            nueva.get("_clave") or ""
+        ).startswith("pos|")
+        if not es_posicion_mexc:
+            return False
+        if cls._numero(anterior, "entrada") > 0 and cls._numero(nueva, "entrada") <= 0:
+            return True
+        return any(
+            cls._numero(nueva, campo) + 1e-12 < cls._numero(anterior, campo)
+            for campo in ("qty", "abierta", "cerrada")
+        )
+
+    def _quitar_cierres_huerfanos_duplicados(self):
+        cierres = [
+            fila
+            for fila in self.filas.values()
+            if str(fila.get("_clave") or "").startswith("cierre|")
+        ]
+        fifos = [
+            fila
+            for fila in self.filas.values()
+            if str(fila.get("_clave") or "").startswith("fifo|")
+        ]
+        matches = {
+            id(cierre): [fifo for fifo in fifos if self._es_cierre_huerfano_duplicado(cierre, fifo)]
+            for cierre in cierres
+        }
+        conteo_fifo = {id(fifo): 0 for fifo in fifos}
+        for candidatos in matches.values():
+            for fifo in candidatos:
+                conteo_fifo[id(fifo)] += 1
+        borrar = [
+            cierre["_clave"]
+            for cierre in cierres
+            if len(matches[id(cierre)]) == 1 and conteo_fifo[id(matches[id(cierre)][0])] == 1
+        ]
+        for clave in borrar:
+            del self.filas[clave]
+        return bool(borrar)
+
     def fusionar(self, nuevas):
         """Guarda las operaciones nuevas o cambiadas y devuelve todo lo archivado."""
         cambio = False
@@ -159,9 +246,13 @@ class Archivo:
             clave = fila.get("_clave")
             if not clave:
                 continue
+            anterior = self.filas.get(clave)
+            if anterior and self._menos_completa(fila, anterior):
+                continue
             if self.filas.get(clave) != fila:
                 self.filas[clave] = fila
                 cambio = True
+        cambio = self._quitar_cierres_huerfanos_duplicados() or cambio
         if cambio:
             self._guardar()
         return self.todas()

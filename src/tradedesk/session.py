@@ -266,9 +266,11 @@ class Session:
                 for orden in filas:
                     orden["_exchange"] = nombre
                     clave = (nombre, str(orden.get("orderId") or ""))
-                    if clave in self._hist_ordenes:
-                        continue
-                    self._hist_ordenes[clave] = orden
+                    anterior = self._hist_ordenes.get(clave)
+                    if anterior is None:
+                        self._hist_ordenes[clave] = orden
+                    else:
+                        anterior.update(orden)
                 if len(filas) < HISTORIAL_PAGINA:
                     self.historial_hay_mas[nombre] = False
             filas = self.archivo.fusionar(operaciones(list(self._hist_ordenes.values())))
