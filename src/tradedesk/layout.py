@@ -56,8 +56,9 @@ CAL_COLS = (
 ROW_H = 56
 ACTION_W = 200
 
-# Pestaña Calendario: alto de cada día del mes y ancho del panel de métricas
+# Pestaña Calendario: medidas de las celdas y ancho del panel de métricas
 CAL_ALTO_DIA = 48
+CAL_ANCHO_DIA = 88
 CAL_PANEL_W = 350
 CAL_ALTO_CABECERA = 26
 

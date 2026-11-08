@@ -247,6 +247,8 @@ color de fondo competía con el texto.
 | Día de hoy | círculo de 11 px de radio en `ACCENT_SOFT` detrás del número (azul, para no confundirse con la semántica verde/rojo del PnL) |
 | Día elegido | tinte de fondo `INPUT`; **hover** en `SURFACE`. El delegado no pinta el resto de la celda: si rellenara todo, taparía los separadores |
 | Fuera de mes | celda vacía (sin número ni importe) |
+| Ancho | siete columnas fijas de 88 px (`CAL_ANCHO_DIA`); la grilla no se estira con la ventana |
+| Neto diario | una línea; si no cabe en 88 px, se elide a la derecha y el tooltip conserva el neto completo |
 | Conteo de operaciones | ya no está en la celda: va al tooltip al pasar el mouse (`04 nov · 7 operaciones · -443.6607`) |
 | Altura | fija: `CAL_ALTO_CABECERA + filas × CAL_ALTO_DIA` (`layout.py`). Si no, el `QScrollArea` estira la tabla y las filas crecen hasta el alto del panel |
 | Tarjeta **Neto del mes** | número grande (18 px, coloreado) + `59 operaciones · 38.98% win rate` + `CurvaMes`, la polilínea de `cal.curva()` (28 px, verde o rojo según el acumulado final, con la línea del cero marcada si la cruza y un punto en el último valor) |
@@ -264,7 +266,9 @@ color de fondo competía con el texto.
   fila `TOTAL` al final. El destino lo elige el usuario (diálogo *Guardar como*).
 - La pestaña vive en un `QScrollArea`: con la ventana de 1800×1000 el área de pestañas queda
   en ~403 px y el mes (318 px con seis semanas) entra entero. Con un día elegido el detalle
-  cae bajo el pliegue y se baja solo.
+  cae bajo el pliegue y se baja solo. La grilla y el panel quedan alineados a la izquierda;
+  el espacio restante queda a la derecha. Si la ventana es demasiado angosta, desplaza el
+  contenido con el scroll horizontal exterior en vez de estirar o romper las celdas.
 - Los estados **vacío** y **cargando** son en línea (una etiqueta y el `Spinner` de `cells.py`),
   nunca un modal.
 

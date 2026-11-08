@@ -1,6 +1,17 @@
 """Medidas de las tablas: la fila de posiciones no crece (regla de AGENTS)."""
 
-from tradedesk.layout import ACTION_W, ORDER_ACTION_W, ORDER_COLS, POS_COLS
+from tradedesk.layout import (
+    ACTION_W,
+    CAL_ANCHO_DIA,
+    ORDER_ACTION_W,
+    ORDER_COLS,
+    POS_COLS,
+)
+
+
+def test_la_grilla_del_calendario_usa_celdas_de_ancho_fijo():
+    assert CAL_ANCHO_DIA == 88
+    assert 7 * CAL_ANCHO_DIA == 616
 
 
 def test_la_fila_de_posiciones_cabe_en_la_ventana():

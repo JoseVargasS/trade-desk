@@ -48,7 +48,8 @@ class DelegadoMes(QStyledItemDelegate):
         )
         if operaciones:
             letra_pnl = fuente(13, True)
-            alto_pnl = QFontMetrics(letra_pnl).height()
+            metricas_pnl = QFontMetrics(letra_pnl)
+            alto_pnl = metricas_pnl.height()
             oculto = bool(datos.get("oculto"))
             if not oculto and neto > 0:
                 color = t.GREEN
@@ -56,10 +57,13 @@ class DelegadoMes(QStyledItemDelegate):
                 color = t.RED
             else:
                 color = t.MUTED
+            texto_pnl = "••••" if oculto else t.fmt_pnl(neto)
+            if metricas_pnl.horizontalAdvance(texto_pnl) > caja.width():
+                texto_pnl = metricas_pnl.elidedText(texto_pnl, Qt.ElideRight, caja.width())
             caja_pnl = QRect(caja.left(), y + alto_dia + 2, caja.width(), alto_pnl)
             pintor.setFont(letra_pnl)
             pintor.setPen(QPen(QColor(color)))
-            pintor.drawText(caja_pnl, int(Qt.AlignCenter), "••••" if oculto else t.fmt_pnl(neto))
+            pintor.drawText(caja_pnl, int(Qt.AlignCenter), texto_pnl)
         pintor.restore()
 
     def helpEvent(self, evento, vista, opcion, indice):

@@ -32,7 +32,7 @@ from .. import calendario as cal
 from .. import paths
 from .. import theme as t
 from ..brokers import TITULOS
-from ..layout import CAL_ALTO_CABECERA, CAL_ALTO_DIA, CAL_COLS, CAL_PANEL_W
+from ..layout import CAL_ALTO_CABECERA, CAL_ALTO_DIA, CAL_ANCHO_DIA, CAL_COLS, CAL_PANEL_W
 from ..pnl import neto_operacion
 from .calendario_widgets import CurvaMes, DelegadoMes
 from .cells import CeldaPar, Spinner, lineas, tabla
@@ -64,8 +64,9 @@ class PestanaCalendario:
         raiz.addLayout(self._cal_barra())
         cuerpo = QHBoxLayout()
         cuerpo.setSpacing(12)
-        cuerpo.addWidget(self._cal_cuadricula(), 1)
+        cuerpo.addWidget(self._cal_cuadricula(), 0)
         cuerpo.addWidget(self._cal_panel(), 0)
+        cuerpo.addStretch(1)
         raiz.addLayout(cuerpo)
         raiz.addWidget(self._cal_detalle(), 0)
         raiz.addStretch(1)
@@ -140,8 +141,12 @@ class PestanaCalendario:
             rejilla.horizontalHeaderItem(columna).setTextAlignment(Qt.AlignCenter)
         rejilla.verticalHeader().setVisible(False)
         rejilla.verticalHeader().setDefaultSectionSize(CAL_ALTO_DIA)
-        rejilla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        rejilla.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        rejilla.horizontalHeader().setDefaultSectionSize(CAL_ANCHO_DIA)
         rejilla.horizontalHeader().setFixedHeight(CAL_ALTO_CABECERA)
+        rejilla.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        rejilla.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        rejilla.setFixedWidth(7 * CAL_ANCHO_DIA + 2 * rejilla.frameWidth() + 2)
         rejilla.setShowGrid(True)
         rejilla.setAlternatingRowColors(False)
         rejilla.setEditTriggers(QAbstractItemView.NoEditTriggers)

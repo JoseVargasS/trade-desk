@@ -156,14 +156,14 @@ es abrir.
 ```
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
-  src/tradedesk/            (8.514 líneas Python; conteo de referencia al 2026-11-06)
+  src/tradedesk/            (8.540 líneas Python; conteo de referencia al 2026-11-07)
     __init__.py              inicialización del paquete                      2
     __main__.py              arranque: AppUserModelID + vista Qt            14
     paths.py                 DATA_DIR (raíz) y ASSETS (paquete)             10
     creds.py                 Windows Credential Manager                    16
     brokers.py               nombres y títulos de los brokers                6
     theme.py                 color, tipografía, radios, formatos            88
-    layout.py                anchos/altos de las tablas (sin UI)             56
+    layout.py                anchos/altos de las tablas (sin UI)             72
     pairs.py                 filtro puro del buscador de pares               36
     forms.py                 parseo puro de tarjeta y editor de orden       100
     pnl.py                   neto de una operación del historial              9
@@ -171,7 +171,10 @@ raiz/
     archivo.py               operaciones guardadas en disco (upsert)        179
     operaciones.py           empareja órdenes en operaciones (historial)    213
     session.py               pollers, cola, config y caches sin UI          627
-    controller.py            casos de uso: abrir, cerrar, TP/SL, órdenes  1.054
+    controller.py            fachada de casos de uso                         443
+    controller_verificacion.py cotejo de estado tras errores                 203
+    controller_tpsl.py       casos de uso TP/SL y Break-even                 216
+    controller_ordenes.py    órdenes y margen                                204
     mexc.py                  firma, endpoints, USDT->contratos, fee, liq    572
     bitunix.py               firma, endpoints, monedas (qty), specs        567
     bingx.py                 firma, endpoints, monedas (qty), specs        607
@@ -184,7 +187,8 @@ raiz/
       tabla_posiciones.py   filas, resumen bruto/neto, globo de la fee     306
       tabla_ordenes.py      órdenes abiertas (panel estilo MEXC)           115
       tabla_historial.py    una fila por operación, con su neto            138
-      calendario.py         mes en cuadrícula, métricas y detalle del día  675
+      calendario.py         mes en cuadrícula, métricas y detalle del día  576
+      calendario_widgets.py delegado del mes y curva acumulada             112
       tarjeta.py            tarjeta de par                                 349
       cierre.py             barra de cierre de la fila (slider, botones)   328
       dialogs.py            fachada: reexporta los diálogos                 40
@@ -199,18 +203,16 @@ raiz/
       cells.py              delegado, celdas con lápiz, spinner, bocadillo 295
       search.py             buscador de pares                               72
       shell.py              ventana de prueba para medir repintado        134
-  tests/                    pytest (240 tests recopilados): lógica, payloads y UI fake
+  tests/                    pytest (241 tests recopilados): lógica, payloads y UI fake
   tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
   scripts/check.bat         lint + formato + tests
   docs/DESIGN.md            sistema de diseno
   docs/PLAN.md              plan de trabajo vivo (fases, estado, bitacora)
 ```
 
-**El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.** En `main`,
-`controller.py` (1.054) supera el objetivo; queda pendiente separar responsabilidades en un
-cambio dedicado para no mezclar ese refactor con el resto. El siguiente es
-`qt/calendario.py` (675, el delegado del mes y el resto de la pestaña en un solo archivo: al
-pasar el tope se parte en `qt/calendario_widgets.py`); después `bingx.py` (607) y
+**El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.**
+`controller.py` y `qt/calendario.py` ya están partidos por responsabilidad y quedan bajo el tope;
+siguen `bingx.py` (607) y
 `qt/ventana.py` (565). `qt/view.py` y `qt/dialogs.py` quedaron como
 **fachadas** que reexportan: así los imports de `__main__.py`, `tools/smoke_live.py` y de la
 propia vista no cambiaron. Si un archivo se acerca al tope, se parte igual: módulo nuevo +
@@ -731,6 +733,9 @@ cantidad exactos de lo que abrió el script.
     justo (sin scroll). Al elegir un día el detalle cae bajo el pliegue y la vista **baja
     sola** (`_cal_bajar`, diferido con `singleShot`: el scrollbar todavía no conoce la altura
     nueva).
+  - Las siete columnas del mes miden 88 px (`CAL_ANCHO_DIA`); la grilla tiene ancho fijo,
+    no muestra scroll interno y queda pegada a la izquierda junto al panel. En ventanas angostas,
+    el `QScrollArea` exterior muestra el scroll horizontal; el neto diario se elide si no cabe.
   - El panel son **dos tarjetas**: *Neto del mes* (número grande + operaciones/win rate +
     `CurvaMes`, la polilínea de `cal.curva()`) y *Resumen del mes* (métricas, brokers con
     wordmark, semanas y la nota del funding). La curva se pinta en verde o rojo según el
