@@ -2,13 +2,27 @@
 
 Ventana local para operar futuros de **MEXC, Bitunix y BingX** a mercado o a límite. Sin navegador, sin servidor, sin puertos abiertos.
 
-## Arrancar
+## Instalar y arrancar en Windows
 
-Doble clic en **`trade-desk`** (el acceso directo del escritorio) o en `Iniciar.bat`.
+1. Descarga el repo desde GitHub (con **Code → Download ZIP**) o clónalo con Git. Descomprime
+   el ZIP en una carpeta fija, por ejemplo `Documentos\Trade Desk`; no lo ejecutes desde la
+   carpeta temporal de Descargas.
+2. Abre esa carpeta y haz doble clic en **`Iniciar.bat`**. Necesitas conexión a internet la
+   primera vez. El instalador prepara `uv`, usa un Python 3.11+ que ya tengas o instala Python
+   3.13 si hace falta, instala las dependencias de la app, crea **Trade Desk** en tu escritorio y
+   abre la ventana. No requiere permisos de administrador.
+3. Las siguientes veces puedes abrirla desde el acceso directo del escritorio. Si vuelves a
+   ejecutar `Iniciar.bat`, revisará que el entorno siga listo y volverá a abrir la app.
 
-Si no abre nada, usa `Iniciar-con-consola.bat` para ver el error.
+Si mueves la carpeta del repo, ejecuta `Iniciar.bat` desde la nueva ubicación para actualizar el
+acceso directo.
 
-## Primera vez
+Si aparece un error, ejecuta **`Iniciar-con-consola.bat`** para ver el detalle.
+
+Este método ejecuta la app desde Python; el Administrador de tareas puede seguir mostrando el
+proceso como **Python**. El acceso directo y la ventana sí usan el nombre y el ícono de Trade Desk.
+
+## Primera vez: conectar los brokers
 
 La app pide tu API key y secret, los prueba contra el broker antes de guardarlos y quedan en el
 **Administrador de credenciales de Windows**, no en archivos. Cada broker se carga por separado
@@ -25,6 +39,9 @@ En Bitunix y BingX la key también tiene que ir atada a la IP; la app fuerza IPv
 keys se validan contra la dirección desde la que sale la conexión.
 
 La app muestra tu IP arriba a la derecha, con botón para copiarla.
+
+En otra laptop debes guardar las keys de nuevo desde **Brokers**. No se transfieren con el repo:
+Windows las protege en el Administrador de credenciales de cada equipo.
 
 ## Uso
 
@@ -137,9 +154,22 @@ AGENTS.md               reglas para agentes
 ```
 
 Los datos (`config.json`, `operaciones.json`, `trades.log`) viven en la raíz del repo y git los
-ignora.
+ignora. `operaciones.json` guarda localmente las operaciones para que sigan visibles cuando el
+broker deje de ofrecer el historial antiguo; también se conserva un respaldo
+(`operaciones.json.bak`). Estos archivos no se sincronizan entre laptops ni se incluyen al
+descargar el repo. El archivo conserva lo que la app ya importó: abre la pestaña **Historial**
+periódicamente para guardar las operaciones antes de que el broker las purgue, y mantén una copia
+de seguridad en otro lugar.
 
-Requiere Python 3.11+ y [uv](https://docs.astral.sh/uv/):
+Para llevar tu historial a otra laptop, cierra Trade Desk en la antigua y copia
+`operaciones.json` y `operaciones.json.bak` a la carpeta nueva, junto a `app.py`, antes de abrir
+la app por primera vez. Puedes copiar también `config.json` si quieres recuperar tus tarjetas y
+preferencias; las API keys siempre se vuelven a ingresar. Conserva una copia de esos archivos en
+un lugar seguro: si se pierde la carpeta del repo y no hay respaldo, se puede perder el historial
+local que ya no está en el broker.
+
+El instalador usa [uv](https://docs.astral.sh/uv/) para preparar Python y las dependencias.
+Para desarrollar o correr las pruebas manualmente, instala las dependencias de desarrollo con
 `uv sync --locked --extra dev`.
 
 Verificación:

@@ -12,10 +12,12 @@ Si algo aquí no coincide con el código, el código manda: corrige este archivo
 `tools/` y los datos del usuario (`config.json`, `trades.log`) en la raíz del repo,
 nunca dentro del paquete: esas rutas las resuelve `tradedesk/paths.py`.
 
-**Arranque.** `app.py` en la raíz es **solo el lanzador** (el acceso directo del escritorio
-apunta a `pythonw app.py`): agrega `src` al path y llama a `tradedesk.__main__:main`. Los `.bat`
-hacen lo mismo con `python -m tradedesk`. No borres ni muevas `app.py` de la raíz sin actualizar
-el acceso directo, o la app deja de abrir con doble clic.
+**Arranque.** `app.py` en la raíz es **solo el lanzador**: agrega `src` al path y llama a
+`tradedesk.__main__:main`. `Iniciar.bat` ejecuta `tools/instalar.ps1`, que usa un Python 3.11+
+existente o instala 3.13 con uv, prepara las dependencias, crea el acceso directo del escritorio y
+abre la app con el `pythonw.exe` del entorno virtual. `Iniciar-con-consola.bat` usa el mismo
+proceso y deja visible la consola para diagnosticar errores. No borres ni muevas `app.py` de la
+raíz sin actualizar el instalador y el acceso directo, o la app deja de abrir.
 
 **Entorno y verificación** (Windows, Python 3.11+):
 
@@ -207,7 +209,7 @@ raiz/
       search.py             buscador de pares                               72
       shell.py              ventana de prueba para medir repintado        134
   tests/                    pytest (241 tests recopilados): lógica, payloads y UI fake
-  tools/                    make_icon, smoke_api, smoke_live, check_account, qt_probe
+  tools/                  make_icon, smoke_api, smoke_live, check_account, qt_probe, instalar.ps1
   scripts/check.bat         lint + formato + tests
   docs/DESIGN.md            sistema de diseno
   docs/PLAN.md              plan de trabajo vivo (fases, estado, bitacora)

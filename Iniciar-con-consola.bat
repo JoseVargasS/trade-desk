@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-python "%~dp0app.py"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\instalar.ps1" -Consola
 echo.
 echo (si ves un error arriba, mandalo)
 pause
