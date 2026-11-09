@@ -11,7 +11,7 @@ from calendar import monthrange
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -66,9 +66,9 @@ class PestanaCalendario:
         cuerpo.setSpacing(12)
         cuerpo.addWidget(self._cal_cuadricula(), 0)
         cuerpo.addWidget(self._cal_panel(), 0)
-        cuerpo.addStretch(1)
+        # el detalle ocupa el espacio libre de la derecha: sin bajar la vista
+        cuerpo.addWidget(self._cal_detalle(), 1)
         raiz.addLayout(cuerpo)
-        raiz.addWidget(self._cal_detalle(), 0)
         raiz.addStretch(1)
 
         scroll = QScrollArea()
@@ -192,11 +192,11 @@ class PestanaCalendario:
 
     def _cal_tarjeta_neto(self):
         caja, columna = self._cal_tarjeta("Neto del mes")
-        self._lbl_neto = _etiqueta("—", 18, True)
-        self._lbl_neto_sub = _etiqueta("", 10, muted=True)
+        self._cal_lbl_neto = _etiqueta("—", 18, True)
+        self._cal_lbl_neto_sub = _etiqueta("", 10, muted=True)
         self._curva = CurvaMes()
-        columna.addWidget(self._lbl_neto)
-        columna.addWidget(self._lbl_neto_sub)
+        columna.addWidget(self._cal_lbl_neto)
+        columna.addWidget(self._cal_lbl_neto_sub)
         columna.addWidget(self._curva)
         return caja
 
@@ -250,8 +250,7 @@ class PestanaCalendario:
         self._lbl_detalle = _etiqueta("", 11, muted=True)
         columna.addWidget(self._lbl_detalle)
         self._tabla_cal = tabla(CAL_COLS, 32)
-        self._tabla_cal.setMaximumHeight(150)
-        columna.addWidget(self._tabla_cal)
+        columna.addWidget(self._tabla_cal, 1)
         return caja
 
     @staticmethod
@@ -337,12 +336,12 @@ class PestanaCalendario:
         self._lbl_anio.setText(str(self._cal_anio))
 
         neto = total["neto"]
-        self._lbl_neto.setText(self._cal_monto(t.fmt_pnl(neto)))
-        self._lbl_neto.setStyleSheet(
+        self._cal_lbl_neto.setText(self._cal_monto(t.fmt_pnl(neto)))
+        self._cal_lbl_neto.setStyleSheet(
             f"color: {t.GREEN if neto >= 0 else t.RED}; background: transparent;"
         )
         operaciones = metricas["operaciones"]
-        self._lbl_neto_sub.setText(
+        self._cal_lbl_neto_sub.setText(
             f"{operaciones} operacion{'es' if operaciones != 1 else ''} · "
             f"{t.fmt_share(metricas['win_rate'] * 100)} win rate"
         )
@@ -523,7 +522,6 @@ class PestanaCalendario:
         self._cal_mes = hoy.month
         self._cal_dia = hoy
         self._cal_pintar()
-        QTimer.singleShot(0, self._cal_bajar)
 
     def _cal_click(self, fila, columna):
         indice = fila * 7 + columna
@@ -535,14 +533,6 @@ class PestanaCalendario:
             return
         self._cal_dia = fecha
         self._cal_pintar()
-        # el detalle cae bajo el pliegue cuando se elige un día: se baja solo
-        # (diferido: el scrollbar todavía no conoce la altura nueva)
-        QTimer.singleShot(0, self._cal_bajar)
-
-    def _cal_bajar(self):
-        """Baja el scroll del área hasta el final (el detalle del día)."""
-        barra = self._cal_scroll.verticalScrollBar()
-        barra.setValue(barra.maximum())
 
     # ----------------------------------------------------------------- filtros
     def _cal_menu_broker(self):

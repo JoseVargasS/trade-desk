@@ -139,8 +139,9 @@ Decisiones de fondo que **no** están en discusión:
     tooltip al pasar el mouse. Al lado están dos tarjetas: **Neto del mes** (número grande,
     operaciones y win rate, y la curva acumulada del mes) y **Resumen del mes** (mejor y peor
     día, profit factor, rachas, drawdown, fees totales, desglose por broker y totales por
-    semana). Al hacer clic en un día se listan sus operaciones abajo (par con wordmark, lado,
-    entrada, salida, PnL, fee, neto y hora) y la vista baja sola hasta el detalle. Se navega
+    semana). Al hacer clic en un día se listan sus operaciones a la **derecha** del panel
+    (par con wordmark, lado, entrada, salida, PnL, fee, neto y hora), en el espacio libre de
+    la pestaña: la vista no baja ni cambia de forma. Se navega
     por mes y año, hay botón **Hoy**, filtros por broker y por par, un botón para **ocultar
     los montos** y otro para **exportar el mes a CSV**. La pestaña
     **no pide nada a la red**: usa las mismas filas del historial (el archivo local fusionado

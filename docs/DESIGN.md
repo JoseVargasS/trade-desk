@@ -253,7 +253,7 @@ color de fondo competía con el texto.
 | Altura | fija: `CAL_ALTO_CABECERA + filas × CAL_ALTO_DIA` (`layout.py`). Si no, el `QScrollArea` estira la tabla y las filas crecen hasta el alto del panel |
 | Tarjeta **Neto del mes** | número grande (18 px, coloreado) + `59 operaciones · 38.98% win rate` + `CurvaMes`, la polilínea de `cal.curva()` (28 px, verde o rojo según el acumulado final, con la línea del cero marcada si la cruza y un punto en el último valor) |
 | Tarjeta **Resumen del mes** | seis filas etiqueta/valor (mejor día, peor día, profit factor, drawdown, rachas, fees), un pelo separador, el desglose por broker (wordmark + cantidad + neto), los totales por semana (enriquecido, verde/rojo) y la nota del funding |
-| Detalle del día | tabla con `CAL_COLS` (`layout.py`): par (con wordmark), lado, entrada, salida, PnL, fee, neto y hora de cierre. Va debajo de la cuadrícula, a lo ancho. Al elegir un día la vista **baja sola** hasta él |
+| Detalle del día | tabla con `CAL_COLS` (`layout.py`): par (con wordmark), lado, entrada, salida, PnL, fee, neto y hora de cierre. Va a la **derecha** del panel de métricas, ocupando el espacio libre y todo el alto del cuerpo (sin tope de 150 px). Sin día elegido muestra el aviso en ese mismo lugar; al hacer clic no se mueve la vista |
 | Barra | `‹ Mes ›`, `‹ Año ›`, **Hoy**, filtros de broker y par (menús con el mismo estilo del selector de la tarjeta), **Ocultar montos**, **Exportar CSV** y **Cargar más historial** |
 
 - El **neto** es `pnl.neto_operacion(pnl, fee)`: la misma cuenta que la columna Neto del

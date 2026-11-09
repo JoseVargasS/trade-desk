@@ -41,16 +41,16 @@ OPER_COLS = (
 
 STATES = {1: "Pendiente", 2: "Sin llenar", 3: "Ejecutada", 4: "Cancelada", 5: "Invalida"}
 
-# Detalle de un día en la pestaña Calendario
+# Detalle de un día en la pestaña Calendario (columna derecha, ~760 px)
 CAL_COLS = (
-    ("par", "Par", 160, "w"),
-    ("lado", "Lado", 74, "w"),
-    ("entrada", "Entrada", 110, "e"),
-    ("salida", "Salida", 110, "e"),
-    ("pnl", "PnL", 118, "e"),
-    ("fee", "Fee", 104, "e"),
-    ("neto", "Neto", 118, "e"),
-    ("hora", "Hora", 90, "w"),
+    ("par", "Par", 136, "w"),
+    ("lado", "Lado", 66, "w"),
+    ("entrada", "Entrada", 94, "e"),
+    ("salida", "Salida", 94, "e"),
+    ("pnl", "PnL", 98, "e"),
+    ("fee", "Fee", 84, "e"),
+    ("neto", "Neto", 98, "e"),
+    ("hora", "Hora", 86, "w"),
 )
 
 ROW_H = 56
