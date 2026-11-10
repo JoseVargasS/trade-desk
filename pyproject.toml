@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trade-desk"
 version = "0.1.0"
-description = "Mesa de ejecucion para futuros de MEXC en Windows (Qt)"
+description = "Mesa de ejecucion para futuros de MEXC, Bitunix y BingX en Windows (Qt)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
