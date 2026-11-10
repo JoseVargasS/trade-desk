@@ -31,6 +31,7 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
 
     VERIFICACION_INTERVALO = 2.0
     VERIFICACION_MUESTRAS = 5
+    CIERRE_ESPERA = 4.0
 
     def __init__(self, session, port, dry=None):
         self.session = session
@@ -429,6 +430,27 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _quedan_abiertas(self, cliente, antes, timeout=None):
+        """Símbolos que siguen abiertos tras cerrar; `None` si no se pudo consultar.
+
+        El cierre es asíncrono: se relee un rato antes de dar el cierre por hecho.
+        """
+        esperadas = {self._clave_symbol(pos.get("symbol")) for pos in antes or ()}
+        fin = time.time() + (self.CIERRE_ESPERA if timeout is None else timeout)
+        while True:
+            try:
+                abiertas = {
+                    self._clave_symbol(pos.get("symbol")): pos.get("symbol")
+                    for pos in cliente.positions() or ()
+                }
+            except Exception as e:
+                self.session.log(f"ERR comprobar cierre: {type(e).__name__}")
+                return None
+            sobran = abiertas.keys() & esperadas if esperadas else abiertas.keys()
+            if not sobran or time.time() >= fin:
+                return {abiertas[clave] for clave in sobran}
+            time.sleep(0.4)
+
     def cerrar_todo(self, cuantas=0):
         if self.dry():
             self.port.status("DRY-RUN: no se cerro nada")
@@ -454,7 +476,16 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
                 ]
                 try:
                     cliente.close_all()
-                    self.session.log(f"OK  close_all {nombre}")
+                    sobran = self._quedan_abiertas(cliente, posiciones_anteriores)
+                    if sobran is None:
+                        incierto = True
+                        fallos.append(f"{nombre}: no se pudo comprobar el cierre")
+                        self.session.log(f"ERR comprobar close_all {nombre}")
+                    elif sobran:
+                        fallos.append(f"{nombre}: sigue abierto {', '.join(sorted(sobran))}")
+                        self.session.log(f"ERR close_all {nombre}: quedan {len(sobran)}")
+                    else:
+                        self.session.log(f"OK  close_all {nombre}")
                 except Exception as e:
                     if self._resultado_desconocido(e):
                         incierto = True

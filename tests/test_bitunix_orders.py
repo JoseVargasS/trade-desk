@@ -170,10 +170,17 @@ def test_cierre_limite_lleva_precio():
     assert cuerpo["effect"] == "GTC"
 
 
-def test_cerrar_todo():
+def test_cerrar_todo_cierra_cada_posicion_por_su_id():
+    """El endpoint masivo responde OK sin detalle: se cierra por `positionId`."""
     cliente, enviados = armado()
+    cliente.positions = lambda: [
+        {"symbol": "BTCUSDT", "positionId": 77},
+        {"symbol": "ETHUSDT", "positionId": 88},
+    ]
     cliente.close_all()
-    assert payload_de(enviados, "/close_all_position") == {}
+    flashes = [cuerpo for ruta, cuerpo in enviados if ruta.endswith("/flash_close_position")]
+    assert flashes == [{"positionId": "77"}, {"positionId": "88"}]
+    assert not any(ruta.endswith("/close_all_position") for ruta, _ in enviados)
 
 
 def test_cancelar_resuelve_el_simbolo():

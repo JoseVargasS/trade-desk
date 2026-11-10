@@ -204,6 +204,21 @@ def test_timeout_en_reverse_avisa_y_refresca_sin_reintentar(app, posicion):
     assert app.verificaciones[0][0] == "reverse"
 
 
+def test_cerrar_todo_avisa_la_posicion_que_siguio_abierta(app):
+    """Cerrar sin error no basta: si la posición sigue, se nombra el símbolo."""
+    app.CIERRE_ESPERA = 0.0
+    app.mx.close_all = lambda: {"code": 0, "data": ""}
+    app.mx.positions = lambda: [{"symbol": "ETH_USDT", "positionId": 9}]
+    app._brokers = lambda: [("mexc", app.mx)]
+    app.session.ultimas_posiciones = [{"symbol": "ETH_USDT", "_exchange": "mexc"}]
+    app.cerrar_todo(1)
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+    cerrado = next(m[1] for m in mensajes if m[0] == "closed")
+
+    assert "ETH_USDT" in cerrado
+    assert "Todas las posiciones cerradas" not in cerrado
+
+
 def test_timeout_al_cerrar_todo_avisa_y_refresca_sin_reintentar(app):
     llamadas = []
 

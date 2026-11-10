@@ -384,7 +384,7 @@ class VistaQt(
         self._btn_sel.clicked.connect(self._cerrar_seleccionadas)
         barra_pos.addWidget(self._btn_sel)
         todo = _boton("CERRAR TODO", 120, 26, t.DANGER_SOFT, t.RED)
-        todo.clicked.connect(lambda: self.control.cerrar_todo(len(self._seleccionadas())))
+        todo.clicked.connect(lambda: self.control.cerrar_todo(len(self._posiciones)))
         barra_pos.addWidget(todo)
         col_pos.addLayout(barra_pos)
         self._tabla_pos = self._tabla_posiciones()

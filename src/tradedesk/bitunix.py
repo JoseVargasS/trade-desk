@@ -469,8 +469,13 @@ class Bitunix:
         return self._post("/api/v1/futures/trade/place_order", payload)
 
     def close_all(self, simbolo=None):
-        cuerpo = {"symbol": canonico(simbolo)} if simbolo else {}
-        return self._post("/api/v1/futures/trade/close_all_position", cuerpo)
+        """Cierra una por una: el endpoint masivo responde OK aunque no cierre nada."""
+        salida = []
+        for posicion in self.positions():
+            if simbolo and canonico(simbolo) != canonico(posicion.get("symbol")):
+                continue
+            salida.append(self.close_position(posicion))
+        return salida
 
     def _esperar_sin_posicion(self, simbolo, timeout=4.0):
         """Espera a que la posición desaparezca: el cierre es asincrono."""
