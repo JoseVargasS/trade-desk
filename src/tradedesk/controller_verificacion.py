@@ -208,9 +208,13 @@ class VerificacionMixin:
                     self.session.refresh_positions()
                     self.session.refresh_orders()
                     return
+                # la primera reconsulta va rápido: el broker suele reflejar el
+                # cambio en menos de un segundo
+                espacios = getattr(self, "VERIFICACION_ESPACIOS", (2.0,))
+                espera = espacios[min(muestras, len(espacios)) - 1]
                 if detener is None:
-                    time.sleep(self.VERIFICACION_INTERVALO)
-                elif detener.wait(self.VERIFICACION_INTERVALO):
+                    time.sleep(espera)
+                elif detener.wait(espera):
                     return
 
         threading.Thread(target=verificar, daemon=True).start()
