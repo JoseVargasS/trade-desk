@@ -23,8 +23,11 @@
    `plan_tp_sl()` lo mueve a TP y avisa por diálogo; si el TP ya está en ese lado, explica
    que deje el SL del lado de la pérdida en vez de mostrar el error en inglés.
 10. **TP/SL rechazado con 5004 al reemplazar**: cancelar y recolocar sin esperar deja la
-    orden vieja contabilizada. `_wait_tpsl_clear()` sondea `stoporder/list/orders` hasta
-    que la posición queda a 0 (máx. 2.5 s) antes de volver a colocar.
+    orden vieja contabilizada. MEXC lo avisa con el código **5004** (viaja en
+    `MexcError.code`), así que la app cancela y **reintenta el envío** (4 intentos,
+    0,4 s entre ellos) en vez de sondear `stoporder/list/orders` hasta que la posición
+    queda a 0: menos viajes y el mismo resultado. Bitunix no da esa señal, así que ahí
+    `_wait_tpsl_clear()` sigue esperando a que la lista quede vacía.
 11. **`order/cancel` respondía 600 Parameter error**: el body es un **array de ids sueltos**
     (`["871374754337090048"]`), no `{"orderIds": [...]}`; los ids van como texto para no
     perder precisión (18 dígitos). `mexc.cancel()` lo arma así y

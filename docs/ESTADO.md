@@ -60,6 +60,14 @@ en ~0 al ejecutarse.
 
 **F7 (opcional, no empezada):** gráficos de velas con TP/SL arrastrables (`pyqtgraph`).
 
+**Lote de velocidad (sin commitear, sin verificar con dinero real):** consultas de cuenta
+por broker en paralelo, cierres y cancellations por broker en paralelo, BE masivo con una
+sola lista de stops por broker, TP/SL de MEXC con reintento ante 5004 (en vez de sondear la
+lista), precio de referencia para no pedir un ticker extra por orden, caché de apalancamiento
+de 60 s en Bitunix/BingX y reconsultas de verificación más rápidas (0,4 / 1 / 2 / 3 s).
+Todo está cubierto con dobles de prueba; **falta probarlo con la cuenta real** (una apertura,
+un cierre, un TP/SL y un BE) antes de darlo por bueno.
+
 **Pendiente / ideas descartadas por ahora:**
 
 - Guardar más de un TP parcial por posición (MEXC admite un TP y un SL por stop order).

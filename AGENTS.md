@@ -204,7 +204,7 @@ uv run --locked python tools/qt_probe.py
 | `theme.py` (formato, color, fuente) | `uv run --locked python -m pytest tests/test_theme.py` |
 | `layout.py` (anchos de tabla) | `uv run --locked python -m pytest tests/test_layout.py` |
 | `mexc.py` (payload, `vol`, precio, fee) | `uv run --locked python -m pytest tests/test_mexc_orders.py tests/test_mexc_pure.py tests/test_visibilidad_historial.py` |
-| `controller.py` (hilos, cola, cierre, TP/SL, órdenes) | `uv run --locked python -m pytest tests/test_no_threaded_widgets.py tests/test_actions_close.py tests/test_mexc_orders.py tests/test_lote.py` |
+| `controller.py` (hilos, cola, cierre, TP/SL, órdenes) | `uv run --locked python -m pytest tests/test_no_threaded_widgets.py tests/test_actions_close.py tests/test_actions_tpsl.py tests/test_actions_ordenes.py tests/test_mexc_orders.py tests/test_lote.py` |
 | `controller_lote.py`, `qt/lote.py` (envío por lote) | `uv run --locked python -m pytest tests/test_lote.py tests/test_deck_cartas.py` |
 | `session.py` (pollers, config, catálogo, logs) | `uv run --locked python -m pytest tests/test_session_polling.py tests/test_paths.py tests/test_respaldos_y_config.py tests/test_visibilidad_historial.py` |
 | `archivo.py` (historial local y respaldos) | `uv run --locked python -m pytest tests/test_archivo.py tests/test_respaldos_y_config.py` |

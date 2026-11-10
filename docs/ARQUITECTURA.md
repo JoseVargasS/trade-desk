@@ -3,7 +3,7 @@
 ```
 raiz/
   app.py                    lanzador del acceso directo (no tiene logica)
-  src/tradedesk/            (10.139 líneas Python; conteo de referencia al 2026-11-09)
+  src/tradedesk/            (10.629 líneas Python; conteo de referencia al 2026-11-10)
     __init__.py              inicialización del paquete                          3
     __main__.py              arranque: AppUserModelID + vista Qt                20
     paths.py                 DATA_DIR (raíz) y ASSETS (paquete)                 13
@@ -17,15 +17,18 @@ raiz/
     calendario.py            agregación por día del historial (puro)           343
     archivo.py               operaciones guardadas en disco (upsert)           351
     operaciones.py           empareja órdenes en operaciones (historial)       284
-    session.py               pollers, cola, config y caches sin UI             703
-    controller.py            fachada de casos de uso                           498
-    controller_verificacion.py cotejo de estado tras errores                   203
-    controller_tpsl.py       casos de uso TP/SL y Break-even                   232
-    controller_ordenes.py    órdenes y margen                                  218
-    controller_lote.py       enviar varias tarjetas con una confirmación        87
-    mexc.py                  firma, endpoints, USDT->contratos, fee, liq       666
-    bitunix.py               firma, endpoints, monedas (qty), specs            641
-    bingx.py                 firma, endpoints, monedas (qty), specs            685
+    session.py               pollers, cola, config y caches sin UI             658
+    session_cuenta.py        consultas de cuenta por broker (posiciones/órdenes) 149
+    ritmo.py                 ritmo de envío y trabajo en paralelo                36
+    controller.py            fachada de casos de uso                           580
+    controller_verificacion.py cotejo de estado tras errores                   223
+    controller_tpsl.py       casos de uso TP/SL y Break-even                   331
+    controller_ordenes.py    órdenes y margen                                  228
+    controller_lote.py       enviar varias tarjetas con una confirmación       113
+    mexc.py                  firma, endpoints, USDT->contratos, fee, liq       683
+    bitunix.py               firma, endpoints, monedas (qty), specs            690
+    bingx.py                 firma, endpoints, monedas (qty), specs            540
+    bingx_comun.py           helpers y filas de BingX (tabla)                  208
     assets/                 icon.ico, icon.png, fonts/*.ttf
     qt/
       __init__.py              inicialización del paquete                        0
@@ -52,7 +55,7 @@ raiz/
       cells.py                 delegado, celdas con lápiz, spinner, bocadillo  340
       search.py                buscador de pares                                88
       shell.py                 ventana de prueba para medir repintado          153
-  tests/                    pytest (269 tests recopilados): lógica, payloads y UI fake
+  tests/                    pytest (291 tests recopilados): lógica, payloads y UI fake
   tools/                  make_icon, smoke_api, smoke_live, check_account, qt_probe, instalar.ps1
   scripts/check.bat         lint + formato + tests
   docs/DESIGN.md            sistema de diseno
@@ -66,12 +69,12 @@ raiz/
 
 **El objetivo es mantener los módulos cerca o por debajo de ~700 líneas.**
 `controller.py` y `qt/calendario.py` ya están partidos por responsabilidad y quedan bajo el tope;
-los más grandes hoy son `session.py` (703, un poco por encima del tope: partirlo por
-responsabilidad es deuda pendiente), `bingx.py` (685), `mexc.py` (666) y `qt/ventana.py` (652,
-ya con el lote en `qt/lote.py`). `qt/view.py` y `qt/dialogs.py` quedaron como
-**fachadas** que reexportan: así los imports de `__main__.py`, `tools/smoke_live.py` y de la
-propia vista no cambiaron. Si un archivo se acerca al tope, se parte igual: módulo nuevo +
-fachada, sin tocar los call sites.
+los más grandes hoy son `bitunix.py` (690), `mexc.py` (683), `session.py` (658, partido en
+`session.py` + `session_cuenta.py`) y `qt/ventana.py` (652, ya con el lote en `qt/lote.py`).
+`bingx.py` bajó a 540 al partir las filas a `bingx_comun.py`. `qt/view.py` y `qt/dialogs.py`
+quedaron como **fachadas** que reexportan: así los imports de `__main__.py`,
+`tools/smoke_live.py` y de la propia vista no cambiaron. Si un archivo se acerca al tope, se
+parte igual: módulo nuevo + fachada, sin tocar los call sites.
 
 Las tres tablas (`tabla_posiciones`, `tabla_ordenes`, `tabla_historial`), la pestaña
 `calendario` y el envío por lote (`lote.py`) son **mixins** de `VistaQt`: usan el estado de

@@ -67,12 +67,28 @@ mismo broker van en serie.** Cada apertura gasta ticker + apalancamiento + orden
 dentro de un broker las peticiones comparten el mismo límite; entre brokers no hay nada
 compartido. Los resultados siempre se ordenan por tarjeta, no por llegada.
 
+**Precio de referencia (`precio_ref`).** El poller ya tiene el precio del par (el de la
+tarjeta). Si tiene menos de 5 s (`PRECIO_MAX_EDAD`), la app lo pasa a `open_market` y a
+`close_position` (solo MEXC lo necesita en el cierre) y el cliente **no pide otro ticker**
+antes de mandar la orden: un viaje menos por orden. Si el precio no está o ya es viejo,
+el cliente lo pide al broker como siempre. El payload no cambia: el precio que se manda
+es el mismo que se habría pedido, salvo que el mercado se haya movido en esos 5 s.
+
+**Apalancamiento (Bitunix y BingX).** El apalancamiento se manda aparte y cuesta un viaje
+por par (y por lado en BingX, que es HEDGE). La app lo cachea **60 s**
+(`APALANCAMIENTO_MAX_EDAD`): si no cambió, no lo reenvía; si cambió, o si pasaron los 60 s,
+lo manda de nuevo. Ojo: si el usuario cambia el apalancamiento en el exchange dentro de esa
+ventana, la app no lo ve hasta que pasa el minuto.
+
 **TP/SL: la dirección se mide contra el precio actual, no contra la entrada.**
 LONG → TP por encima y SL por debajo; SHORT al revés. Un `stopLossPrice` del lado
 de la ganancia se rechaza con **5003** aunque esté lejos; ese mismo nivel sí entra
 como `takeProfitPrice`. `mexc.plan_tp_sl()` aplica la regla antes de enviar.
 El `stoporder/cancel` es **asíncrono**: recolocar de inmediato da **5004**
-("greater than the closable amount"), por eso se espera a que la lista quede vacía.
+("greater than the closable amount"). MEXC avisa con ese código (viaja en
+`MexcError.code`), así que la app **reintenta el envío** (hasta 4 veces, 0,4 s entre
+intentos) en vez de sondear la lista de stops: menos viajes y el mismo resultado.
+Bitunix no da esa señal: ahí sí se espera a que la lista quede vacía.
 
 **Idempotencia (lo que hay y lo que no).** Cada apertura (y el cierre de MEXC) lleva un
 `externalOid` único, pero **no existe ningún reintento automático**: ni `httpx` reintenta
