@@ -5,8 +5,8 @@ UI de trading oscura: densidad de información y legibilidad numérica antes que
 Mismo lenguaje visual que la app Android *DeFi Tracker* (`docs/DESIGN.md` de ese repo),
 adaptado a escritorio.
 
-> Las reglas están en `AGENTS.md`. Este documento es el inventario: qué token existe,
-> dónde vive y qué está fuera de norma. Si los dos se contradicen, gana `AGENTS.md`.
+> Las reglas de UI están en `docs/UI_REGLAS.md`. Este documento es el inventario: qué token
+> existe, dónde vive y qué está fuera de norma. Si los dos se contradicen, gana `UI_REGLAS.md`.
 
 ---
 
@@ -158,7 +158,7 @@ fila: se deduce del lápiz de margen, que aparece deshabilitado en cruzado.
   un dato pegado al borde y se lee peor.
 - **Columnas con lápiz (`margen`, `tpsl`)**: el lápiz va al final de la celda, dentro de los
   6 px de padding. La cabecera **no** reserva ese hueco: el título de esas dos columnas
-  termina ~20 px a la derecha del valor (está en la deuda visual de §8).
+  termina ~20 px a la derecha del valor (deuda visual conocida: no se reserva ese hueco).
 - Anchos: `par 132 · lado 96 · apertura 84 · pos 112 · entrada 94 · mark 94 · liq 100 ·
   ratio 98 · margen 132 · pnl 122 · fee 140 · tpsl 188` (1392 px de columnas). `Lado` está
   en 96 porque `100X SHORT` ocupa ~81 px y con 74 se cortaba en `10X SHOR`; `Par` en 132 para que entre `GOLD(XAU)USDT` (107); `Posición` en 112 por el
@@ -174,9 +174,13 @@ fila: se deduce del lápiz de margen, que aparece deshabilitado en cruzado.
   cuerpo inclinado 135°, banda y punta. Sin glifo Unicode (evita tofu y look genérico).
 
 **Reglas de las tarjetas**
-- Fila horizontal con scroll; `+ Añadir par` agrega a la derecha.
-- Ancho fijo de 286 px y alto fijo de 436 px (`setFixedSize`), como antes: el deck no se
-  reajusta al contenido.
+- Fila horizontal con scroll; `+ Añadir par` agrega a la derecha y, antes, el botón
+  `ENVIAR TODAS (N)` (170 × 34, se apaga con N = 0 o con un lote en curso).
+- Ancho fijo de 286 px y alto fijo de 468 px (`TARJETA_W`/`TARJETA_H` en `layout.py`), como
+  antes: el deck no se reajusta al contenido. Los 32 px de más son la fila `Lote`.
+- Fila `Lote`, entre los inputs y `LONG`/`SHORT`: tres botones exclusivos (`QButtonGroup`)
+  `—` / `LONG` / `SHORT`, alto 24. El elegido pinta su color (`MUTED` / `GREEN` / `RED`) sobre
+  `SURFACE`; los otros quedan en `MUTED` sobre `INPUT`. Arranca en `—` y no se guarda.
 - La ✕ de quitar va en la cabecera, a la derecha del nombre.
 
 ---

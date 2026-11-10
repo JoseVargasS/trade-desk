@@ -6,7 +6,6 @@ config.json
 
 # trabajo local: capturas de prueba y notas de migracion (no se versionan)
 _*.png
-docs/PLAN.md
 
 # herramientas
 .pytest_cache/
