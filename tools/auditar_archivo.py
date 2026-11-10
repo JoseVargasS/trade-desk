@@ -1,13 +1,21 @@
-"""Diagnostica duplicados y netos mensuales en operaciones.json, sin escribir archivos."""
+"""Diagnostica duplicados y netos mensuales en operaciones.json.
+
+Solo lee: no escribe ni corrige nada. Las reglas de duplicado son las mismas que
+aplica `archivo.fusionar`, así que "la app borraría" es exactamente lo que
+desaparece al refrescar el Historial.
+
+    uv run --locked python tools/auditar_archivo.py
+"""
 
 import json
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tradedesk import calendario  # noqa: E402
+from tradedesk.archivo import Archivo  # noqa: E402
 from tradedesk.paths import DATA_DIR  # noqa: E402
 from tradedesk.pnl import neto_operacion  # noqa: E402
 
@@ -24,42 +32,33 @@ def _leer_filas(ruta):
     return datos
 
 
-def _marca(fila):
-    return (
-        str(fila.get("_exchange") or ""),
-        str(fila.get("symbol") or ""),
-        str(fila.get("lado") or ""),
-    )
+def _por_tipo(filas, prefijo):
+    return [fila for fila in filas if str(fila.get("_clave") or "").startswith(prefijo)]
 
 
-def _cierre_ms(fila):
-    try:
-        cierre = float(fila.get("cierre") or 0)
-    except (TypeError, ValueError):
-        return None
-    return cierre if cierre > 0 else None
+def _duplicados(filas):
+    """(borrables, ambiguos, huérfanos) con la regla real de `fusionar`.
 
-
-def _posibles_duplicados(filas):
-    fifo_por_marca = defaultdict(list)
-    for fila in filas:
-        if str(fila.get("_clave") or "").startswith("fifo|"):
-            fifo_por_marca[_marca(fila)].append(fila)
-
-    pares = []
-    cierres_duplicados = set()
-    for cierre in filas:
-        if not str(cierre.get("_clave") or "").startswith("cierre|"):
-            continue
-        cierre_ms = _cierre_ms(cierre)
-        if cierre_ms is None:
-            continue
-        for fifo in fifo_por_marca[_marca(cierre)]:
-            fifo_ms = _cierre_ms(fifo)
-            if fifo_ms is not None and abs(cierre_ms - fifo_ms) < 1000:
-                pares.append((cierre, fifo))
-                cierres_duplicados.add(id(cierre))
-    return pares, cierres_duplicados
+    `borrables` son los `cierre|` que la app elimina: un único `fifo|` coincide y
+    ese FIFO no sirve a ningún otro cierre. El resto se conserva a propósito.
+    """
+    cierres = _por_tipo(filas, "cierre|")
+    fifos = _por_tipo(filas, "fifo|")
+    matches = {
+        id(cierre): [fifo for fifo in fifos if Archivo._es_cierre_huerfano_duplicado(cierre, fifo)]
+        for cierre in cierres
+    }
+    usos = Counter(id(fifo) for candidatos in matches.values() for fifo in candidatos)
+    borrables, ambiguos, huerfanos = [], [], []
+    for cierre in cierres:
+        candidatos = matches[id(cierre)]
+        if not candidatos:
+            huerfanos.append(cierre)
+        elif len(candidatos) == 1 and usos[id(candidatos[0])] == 1:
+            borrables.append((cierre, candidatos[0]))
+        else:
+            ambiguos.append((cierre, candidatos))
+    return borrables, ambiguos, huerfanos
 
 
 def _netos_mensuales(filas):
@@ -70,11 +69,12 @@ def _netos_mensuales(filas):
 
 def _mostrar_fila(etiqueta, fila):
     neto = neto_operacion(fila.get("pnl"), fila.get("fee"))
-    print(f"  {etiqueta}: neto={neto:.4f} | {json.dumps(fila, ensure_ascii=False, sort_keys=True)}")
+    detalle = json.dumps(fila, ensure_ascii=False, sort_keys=True)
+    print(f"    {etiqueta}: neto={neto:.4f} | {detalle}")
 
 
 def auditar(filas):
-    """Imprime el inventario, posibles duplicados y netos mensuales."""
+    """Imprime el inventario, el diagnóstico de duplicados y los netos mensuales."""
     print("Filas por broker:")
     conteo = Counter(str(fila.get("_exchange") or "(sin broker)") for fila in filas)
     for broker, cantidad in sorted(conteo.items()):
@@ -82,40 +82,44 @@ def auditar(filas):
     if not conteo:
         print("  (sin filas)")
 
-    cierres = [fila for fila in filas if str(fila.get("_clave") or "").startswith("cierre|")]
-    pares, cierres_duplicados = _posibles_duplicados(filas)
-    fifos_por_cierre = defaultdict(list)
-    for cierre, fifo in pares:
-        fifos_por_cierre[id(cierre)].append(fifo)
-
-    print(f'\nFilas con _clave "cierre|": {len(cierres)}')
-    if not cierres:
+    borrables, ambiguos, huerfanos = _duplicados(filas)
+    total_cierres = len(borrables) + len(ambiguos) + len(huerfanos)
+    print(f'\nFilas con _clave "cierre|": {total_cierres}')
+    if total_cierres == 0:
         print("  (ninguna)")
-    for fila in cierres:
-        fifos = fifos_por_cierre[id(fila)]
-        if not fifos:
-            _mostrar_fila("sin FIFO cercano", fila)
-        else:
-            for fifo in fifos:
-                print("  POSIBLE DUPLICADO")
-                _mostrar_fila("cierre|", fila)
-                _mostrar_fila("fifo|", fifo)
-    print(f"\nPares POSIBLE DUPLICADO: {len(pares)}")
-    if not pares:
-        print("  (ninguno)")
+    if borrables:
+        print(f"  La app borraría {len(borrables)} (huérfano con FIFO único):")
+        for cierre, fifo in borrables:
+            _mostrar_fila("cierre|", cierre)
+            _mostrar_fila("fifo|", fifo)
+    for cierre, candidatos in ambiguos:
+        print(f"  Ambiguo: {len(candidatos)} FIFO coinciden; se conserva:")
+        _mostrar_fila("cierre|", cierre)
+        for fifo in candidatos:
+            _mostrar_fila("fifo|", fifo)
+    for cierre in huerfanos:
+        print("  Sin FIFO coincidente; se conserva:")
+        _mostrar_fila("cierre|", cierre)
+    print(f"\nPares que la app borraría: {len(borrables)}")
+    if ambiguos or huerfanos:
+        print(
+            "  Hay cierres que no cuadran con un FIFO único: refresca el historial "
+            "de ese broker y la app los recalcula."
+        )
 
-    filas_sin_duplicados = [fila for fila in filas if id(fila) not in cierres_duplicados]
+    borrar = {id(cierre) for cierre, _fifo in borrables}
+    filas_sin = [fila for fila in filas if id(fila) not in borrar]
     netos = _netos_mensuales(filas)
-    netos_sin_duplicados = _netos_mensuales(filas_sin_duplicados)
-    periodos = sorted(set(netos) | set(netos_sin_duplicados))
+    netos_sin = _netos_mensuales(filas_sin)
+    periodos = sorted(set(netos) | set(netos_sin))
     print("\nNeto mensual (hora local del equipo; neto = PnL - fee):")
     if not periodos:
         print("  (sin operaciones cerradas)")
     for anio, mes in periodos:
         print(
             f"  {anio:04d}-{mes:02d}: con posibles duplicados "
-            f"{netos.get((anio, mes), 0.0):.4f}; sin posibles duplicados "
-            f"{netos_sin_duplicados.get((anio, mes), 0.0):.4f}"
+            f"{netos.get((anio, mes), 0.0):.4f}; sin los que la app borraría "
+            f"{netos_sin.get((anio, mes), 0.0):.4f}"
         )
 
 
