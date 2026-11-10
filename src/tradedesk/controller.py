@@ -20,6 +20,7 @@ from .controller_ordenes import OrdenesMixin
 from .controller_tpsl import TpslMixin
 from .controller_verificacion import VerificacionMixin
 from .forms import volumen_cerrar
+from .ritmo import en_paralelo
 
 
 class BrokerNoDisponibleError(RuntimeError):
@@ -464,49 +465,57 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
         ):
             return
 
-        def run():
-            fallos = []
+        def cerrar_broker(nombre, cliente):
+            """Cierra un broker y comprueba; devuelve (fallos, incierto, avisos)."""
+            fallos, verificaciones = [], []
             incierto = False
-            verificaciones = []
-            for nombre, cliente in self._brokers():
-                posiciones_anteriores = [
-                    pos
-                    for pos in getattr(self.session, "ultimas_posiciones", ())
-                    if (pos.get("_exchange") or "mexc") == nombre
-                ]
-                try:
-                    cliente.close_all()
-                    sobran = self._quedan_abiertas(cliente, posiciones_anteriores)
-                    if sobran is None:
-                        incierto = True
-                        fallos.append(f"{nombre}: no se pudo comprobar el cierre")
-                        self.session.log(f"ERR comprobar close_all {nombre}")
-                    elif sobran:
-                        fallos.append(f"{nombre}: sigue abierto {', '.join(sorted(sobran))}")
-                        self.session.log(f"ERR close_all {nombre}: quedan {len(sobran)}")
-                    else:
-                        self.session.log(f"OK  close_all {nombre}")
-                except Exception as e:
-                    if self._resultado_desconocido(e):
-                        incierto = True
-                        fallos.append(f"{nombre}: {self._mensaje_desconocido('cerrar')}")
-                        self.session.log(f"ERR close_all {nombre}: {type(e).__name__}")
+            posiciones_anteriores = [
+                pos
+                for pos in getattr(self.session, "ultimas_posiciones", ())
+                if (pos.get("_exchange") or "mexc") == nombre
+            ]
+            try:
+                cliente.close_all()
+                sobran = self._quedan_abiertas(cliente, posiciones_anteriores)
+                if sobran is None:
+                    incierto = True
+                    fallos.append(f"{nombre}: no se pudo comprobar el cierre")
+                    self.session.log(f"ERR comprobar close_all {nombre}")
+                elif sobran:
+                    fallos.append(f"{nombre}: sigue abierto {', '.join(sorted(sobran))}")
+                    self.session.log(f"ERR close_all {nombre}: quedan {len(sobran)}")
+                else:
+                    self.session.log(f"OK  close_all {nombre}")
+            except Exception as e:
+                if self._resultado_desconocido(e):
+                    incierto = True
+                    fallos.append(f"{nombre}: {self._mensaje_desconocido('cerrar')}")
+                    self.session.log(f"ERR close_all {nombre}: {type(e).__name__}")
 
-                        simbolos = {
-                            self._clave_symbol(pos.get("symbol")) for pos in posiciones_anteriores
-                        }
+                    simbolos = {
+                        self._clave_symbol(pos.get("symbol")) for pos in posiciones_anteriores
+                    }
 
-                        def comprobar(cliente=cliente, nombre=nombre, simbolos=simbolos):
-                            actuales = cliente.positions()
-                            return not any(
-                                not simbolos or self._clave_symbol(pos.get("symbol")) in simbolos
-                                for pos in actuales or ()
-                            )
+                    def comprobar(cliente=cliente, nombre=nombre, simbolos=simbolos):
+                        actuales = cliente.positions()
+                        return not any(
+                            not simbolos or self._clave_symbol(pos.get("symbol")) in simbolos
+                            for pos in actuales or ()
+                        )
 
-                        verificaciones.append((f"cierre total en {nombre}", comprobar))
-                    else:
-                        fallos.append(f"{nombre}: {e}")
-                        self.session.log(f"ERR close_all {nombre}: {e}")
+                    verificaciones.append((f"cierre total en {nombre}", comprobar))
+                else:
+                    fallos.append(f"{nombre}: {e}")
+                    self.session.log(f"ERR close_all {nombre}: {e}")
+            return fallos, incierto, verificaciones
+
+        def run():
+            # Cada broker tiene su propio rate limit: cerrarlos a la vez no los
+            # hace competir por las peticiones.
+            por_broker = en_paralelo(lambda par: cerrar_broker(*par), self._brokers(), 3)
+            fallos = [fallo for fallos, _, _ in por_broker for fallo in fallos]
+            incierto = any(incierto for _, incierto, _ in por_broker)
+            verificaciones = [aviso for _, _, avisos in por_broker for aviso in avisos]
             if fallos:
                 self.q.put(("closed", " | ".join(fallos)))
             else:

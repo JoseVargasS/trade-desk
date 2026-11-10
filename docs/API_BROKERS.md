@@ -106,7 +106,7 @@ GET  /api/v1/futures/trade/get_pending_orders  devuelve `{total, orderList}`
 GET  /api/v1/futures/tpsl/get_pending_orders
 POST /api/v1/futures/trade/place_order         abrir/cerrar
 POST /api/v1/futures/trade/flash_close_position cierre total a mercado
-POST /api/v1/futures/trade/close_all_position   cerrar todo
+POST /api/v1/futures/trade/close_all_position   NO se usa: responde code 0 aunque no cierre nada
 POST /api/v1/futures/trade/cancel_orders        body {symbol, orderList:[{orderId}]}
 POST /api/v1/futures/account/change_leverage    {marginCoin, symbol, leverage}
 POST /api/v1/futures/account/adjust_position_margin
@@ -135,6 +135,10 @@ endpoint, Bitunix rechaza un `place_order` de apertura del mismo par con `30016`
 (probado con 0.0001 y 0.0002, y esperando hasta 10 s). La apertura en frío del mismo
 tamaño entra sin problema. Por eso `reverse` cierra con `place_order` reduceOnly y no
 con flash, y el cierre normal de la fila sí puede usar flash (no reabre nada).
+
+**`flash_close_position` acepta 5 req/s/uid**: `close_all` manda los cierres en
+paralelo (hasta 4 a la vez), pero marcados con `Ritmo` para no pasarse de ese ritmo.
+Los brokers se cierran entre sí en paralelo porque cada uno tiene su propio límite.
 
 **Órdenes en modo HEDGE** (es el modo de la cuenta real): llevan `tradeSide`
 (`OPEN`/`CLOSE`) y, al cerrar, `positionId` + `reduceOnly: true`. Para el cierre

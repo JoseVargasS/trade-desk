@@ -219,6 +219,29 @@ def test_cerrar_todo_avisa_la_posicion_que_siguio_abierta(app):
     assert "Todas las posiciones cerradas" not in cerrado
 
 
+def test_cerrar_todo_no_se_detiene_si_un_broker_falla(app):
+    """Se cierran los tres a la vez: el que falla no deja al resto parado."""
+    app.CIERRE_ESPERA = 0.0
+    cerrados = []
+
+    def falla():
+        cerrados.append("mexc")
+        raise RuntimeError("boom")
+
+    otro = types.SimpleNamespace(
+        close_all=lambda: cerrados.append("bitunix"),
+        positions=lambda: [],
+    )
+    app.mx.close_all = falla
+    app.mx.positions = lambda: []
+    app._brokers = lambda: [("mexc", app.mx), ("bitunix", otro)]
+    app.cerrar_todo(1)
+    mensajes = [app.q.get_nowait() for _ in range(app.q.qsize())]
+
+    assert sorted(cerrados) == ["bitunix", "mexc"]
+    assert "boom" in next(m[1] for m in mensajes if m[0] == "closed")
+
+
 def test_timeout_al_cerrar_todo_avisa_y_refresca_sin_reintentar(app):
     llamadas = []
 

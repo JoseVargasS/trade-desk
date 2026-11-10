@@ -19,6 +19,8 @@ import uuid
 
 import httpx
 
+from .ritmo import Ritmo, en_paralelo
+
 BASE = "https://fapi.bitunix.com"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -469,13 +471,23 @@ class Bitunix:
         return self._post("/api/v1/futures/trade/place_order", payload)
 
     def close_all(self, simbolo=None):
-        """Cierra una por una: el endpoint masivo responde OK aunque no cierre nada."""
-        salida = []
-        for posicion in self.positions():
-            if simbolo and canonico(simbolo) != canonico(posicion.get("symbol")):
-                continue
-            salida.append(self.close_position(posicion))
-        return salida
+        """Cierra una por una: el endpoint masivo responde OK aunque no cierre nada.
+
+        Los cierres salen en paralelo, pero marcados a los 4 req/s que admite
+        `flash_close_position` (el límite documentado es 5/s por uid).
+        """
+        posiciones = [
+            posicion
+            for posicion in self.positions()
+            if not simbolo or canonico(simbolo) == canonico(posicion.get("symbol"))
+        ]
+        ritmo = Ritmo(4)
+
+        def cerrar(posicion):
+            ritmo.esperar()
+            return self.close_position(posicion)
+
+        return en_paralelo(cerrar, posiciones, 4)
 
     def _esperar_sin_posicion(self, simbolo, timeout=4.0):
         """Espera a que la posición desaparezca: el cierre es asincrono."""

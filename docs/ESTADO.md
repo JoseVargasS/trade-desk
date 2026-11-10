@@ -39,7 +39,8 @@ en ~0 al ejecutarse.
   `qty` en monedas, posiciones y órdenes mezcladas en las mismas tablas (con el
   wordmark del broker), **abrir** (mercado y límite, con TP/SL en la misma orden),
   **cerrar** (total por `flash_close_position`, parcial y límite por `place_order`
-  reduce-only), **cerrar todo**, **cancelar** (una o todas) y **apalancamiento**.
+  reduce-only), **cerrar todo** (una por una: el endpoint masivo responde OK aunque no
+  cierre nada), **cancelar** (una o todas) y **apalancamiento**.
 - **Todo lo de la interfaz funciona igual que en MEXC:** editar TP/SL de una posición
   (nivel de posición, verificado: 70.000/90.000 y luego 71.000/95.000), modificar una orden
 (nativa, verificado 60.052,6 → 60.552,6 con qty 0,0002), cambiar margen (verificado
