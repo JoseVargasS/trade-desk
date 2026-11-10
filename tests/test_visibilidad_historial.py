@@ -5,6 +5,7 @@ import threading
 import pytest
 
 from tradedesk import session as session_module
+from tradedesk import session_cuenta as cuenta_module
 from tradedesk.mexc import Mexc, MexcError
 from tradedesk.session import Session
 
@@ -66,9 +67,9 @@ def _session(mx, bitunix, bingx):
 
 
 def test_posiciones_de_un_broker_fallido_no_ocultan_los_otros(monkeypatch):
-    monkeypatch.setattr(session_module, "decorate_positions", lambda _c, rows, **_kw: rows)
-    monkeypatch.setattr(session_module, "decorate_positions_bitunix", lambda _c, rows, _s: rows)
-    monkeypatch.setattr(session_module, "decorate_positions_bingx", lambda _c, rows, _o, _f: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_positions", lambda _c, rows, **_kw: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_positions_bitunix", lambda _c, rows, _s: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_positions_bingx", lambda _c, rows, _o, _f: rows)
     mx = ReadClient(fail="positions")
     bitunix = ReadClient(positions=[{"symbol": "ETHUSDT"}])
     bingx = ReadClient(positions=[{"symbol": "BTC-USDT"}])
@@ -81,9 +82,9 @@ def test_posiciones_de_un_broker_fallido_no_ocultan_los_otros(monkeypatch):
 
 
 def test_fallo_de_comisiones_bingx_se_avisa_sin_ocultar_posiciones(monkeypatch):
-    monkeypatch.setattr(session_module, "decorate_positions", lambda _c, rows, **_kw: rows)
-    monkeypatch.setattr(session_module, "decorate_positions_bitunix", lambda _c, rows, _s: rows)
-    monkeypatch.setattr(session_module, "decorate_positions_bingx", lambda _c, rows, _o, _f: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_positions", lambda _c, rows, **_kw: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_positions_bitunix", lambda _c, rows, _s: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_positions_bingx", lambda _c, rows, _o, _f: rows)
     bingx = ReadClient(positions=[{"symbol": "BTC-USDT"}])
 
     def falla():
@@ -100,9 +101,9 @@ def test_fallo_de_comisiones_bingx_se_avisa_sin_ocultar_posiciones(monkeypatch):
 
 
 def test_ordenes_de_un_broker_fallido_no_ocultan_los_otros(monkeypatch):
-    monkeypatch.setattr(session_module, "decorate_orders", lambda _c, rows: rows)
-    monkeypatch.setattr(session_module, "decorate_orders_bitunix", lambda _c, rows: rows)
-    monkeypatch.setattr(session_module, "decorate_orders_bingx", lambda _c, rows: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_orders", lambda _c, rows: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_orders_bitunix", lambda _c, rows: rows)
+    monkeypatch.setattr(cuenta_module, "decorate_orders_bingx", lambda _c, rows: rows)
     mx = ReadClient(orders=[{"orderId": "1"}], fail="orders")
     bitunix = ReadClient(orders=[{"orderId": "2"}])
     bingx = ReadClient(orders=[{"orderId": "3"}])

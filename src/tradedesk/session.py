@@ -18,15 +18,15 @@ from . import creds, paths
 from .archivo import Archivo
 from .bingx import Bingx
 from .bingx import canonico as canonico_bingx
-from .bingx import decorate_orders as decorate_orders_bingx
-from .bingx import decorate_positions as decorate_positions_bingx
 from .bitunix import Bitunix, con_guion
-from .bitunix import decorate_orders as decorate_orders_bitunix
-from .bitunix import decorate_positions as decorate_positions_bitunix
-from .mexc import Mexc, decorate_orders, decorate_positions, display_name
+from .mexc import Mexc, decorate_orders, display_name
 from .operaciones import operaciones
+from .ritmo import en_paralelo
+from .session_cuenta import CuentaMixin
 
 TICKER_SEG = 0.70  # 0,7 s entre requests de un broker (MEXC: 10/2 s, va holgado)
+# un precio del poller más viejo que esto no se usa para mandar órdenes
+PRECIO_MAX_EDAD = 5.0
 BROKERS = ("mexc", "bitunix", "bingx")
 POSICIONES_SEG = 3.0
 HISTORIAL_SEG = 15.0
@@ -44,7 +44,7 @@ def _es_true(value):
     return value is True or str(value).lower() in ("1", "true")
 
 
-class Session:
+class Session(CuentaMixin):
     def __init__(self, mx=None, bitunix=None, bingx=None):
         self.mx = mx or Mexc(*creds.load("mexc"))
         # segundo broker: por ahora solo lectura (F1); se rutea por tarjeta en F3
@@ -63,6 +63,9 @@ class Session:
         self.tarjetas = self._tarjetas()
         self._candado_tarjetas = threading.Lock()  # los hilos leen la lista mientras la UI la mueve
         self.precios = {}
+        # precio por par y broker, con su hora: lo usan las órdenes y el TP/SL
+        # para no pedir un ticker extra
+        self.precios_par = {}
         self.mercados = {}
         self.ultimas_posiciones = []
         self.ultimas_ordenes = []
@@ -101,6 +104,20 @@ class Session:
     def clientes(self):
         """Los tres clientes, con o sin claves (la tarjeta decide si sirve)."""
         return {"mexc": self.mx, "bitunix": self.bitunix, "bingx": self.bingx}
+
+    def precio_de(self, exchange, symbol):
+        """Precio del par si el poller lo trajo hace poco; si no, None.
+
+        Evita el ticker extra antes de una orden o un TP/SL: el precio ya está
+        en pantalla. Pasado `PRECIO_MAX_EDAD` no se usa (puede estar viejo).
+        """
+        dato = self.precios_par.get((exchange, _clave_mercado(symbol)))
+        if not dato:
+            return None
+        precio, momento = dato
+        if time.monotonic() - momento > PRECIO_MAX_EDAD:
+            return None
+        return precio
 
     def _tarjetas_de(self, exchange):
         """Copia de las tarjetas de un broker.
@@ -250,6 +267,7 @@ class Session:
             # el refresco automatico pide siempre la 1 (los cierres nuevos);
             # `Ver mas` avanza el puntero y pide esa pagina
             pagina = self._hist_pagina if mas else 1
+            pedidos = []
             for nombre, traer in (
                 (
                     "mexc",
@@ -264,15 +282,21 @@ class Session:
                     lambda: self.bingx.history(HISTORIAL_PAGINA, (pagina - 1) * HISTORIAL_PAGINA),
                 ),
             ):
-                cliente = self.cliente(nombre)
-                if cliente is None:
+                if self.cliente(nombre) is None:
                     continue
+                pedidos.append((nombre, traer))
+
+            # cada broker se consulta por su lado: el historial no se atrasa por el lento
+            def traer_seguro(par):
+                nombre, traer = par
                 try:
-                    filas = traer()
+                    return nombre, traer()
                 except Exception as exc:
                     self.q.put(("error", f"historial {nombre}: {exc}"))
-                    continue
-                for orden in filas:
+                    return nombre, []
+
+            for nombre, filas in en_paralelo(traer_seguro, pedidos, 3):
+                for orden in filas or ():
                     orden["_exchange"] = nombre
                     clave = (nombre, str(orden.get("orderId") or ""))
                     anterior = self._hist_ordenes.get(clave)
@@ -280,7 +304,7 @@ class Session:
                         self._hist_ordenes[clave] = orden
                     else:
                         anterior.update(orden)
-                if len(filas) < HISTORIAL_PAGINA:
+                if len(filas or ()) < HISTORIAL_PAGINA:
                     self.historial_hay_mas[nombre] = False
             filas = self.archivo.fusionar(operaciones(list(self._hist_ordenes.values())))
             self.q.put(("history", filas))
@@ -320,63 +344,6 @@ class Session:
             if origen.exists():
                 os.replace(origen, destino)
 
-    def refresh_positions(self):
-        try:
-            self.q.put(("positions", self.posiciones_todas()))
-        except Exception as exc:
-            self.q.put(("status", f"posiciones: {exc}"))
-
-    def posiciones_todas(self):
-        """Posiciones de todos los brokers conectados, ya adaptadas a la interfaz."""
-        filas = []
-        cliente = self.cliente("mexc")
-        if cliente:
-            try:
-                posiciones = decorate_positions(
-                    cliente,
-                    cliente.positions(),
-                    on_error=lambda recurso, exc: self._error_consulta(
-                        f"{recurso} de posiciones", "mexc", exc
-                    ),
-                )
-            except Exception as exc:
-                self._error_consulta("posiciones", "mexc", exc)
-            else:
-                for pos in posiciones:
-                    pos["_exchange"] = "mexc"
-                    filas.append(pos)
-        cliente = self.cliente("bitunix")
-        if cliente:
-            try:
-                stops = cliente.tpsl_list()
-            except Exception as exc:
-                self._error_consulta("TP/SL de posiciones", "bitunix", exc)
-                stops = []
-            try:
-                filas.extend(decorate_positions_bitunix(cliente, cliente.positions(), stops))
-            except Exception as exc:
-                self._error_consulta("posiciones", "bitunix", exc)
-        cliente = self.cliente("bingx")
-        if cliente:
-            try:
-                condicionales = cliente.open_orders()
-            except Exception as exc:
-                self._error_consulta("TP/SL de posiciones", "bingx", exc)
-                condicionales = []
-            try:
-                posiciones = cliente.positions()
-                try:
-                    comisiones = cliente.comisiones() if posiciones else {}
-                except Exception as exc:
-                    self._error_consulta("comisiones de posiciones", "bingx", exc)
-                    comisiones = {}
-                filas.extend(
-                    decorate_positions_bingx(cliente, posiciones, condicionales, comisiones)
-                )
-            except Exception as exc:
-                self._error_consulta("posiciones", "bingx", exc)
-        return filas
-
     def _error_consulta(self, recurso, broker, exc):
         texto = f"{recurso} {broker}: {exc}"
         self.log(f"ERR {recurso} {broker}: {type(exc).__name__}")
@@ -388,32 +355,6 @@ class Session:
             self.q.put(("status", estado))
             self._archivo_estado_publicado = estado
 
-    def refresh_orders(self):
-        try:
-            self.q.put(("orders", self.ordenes_todas()))
-        except Exception as exc:
-            self.q.put(("status", f"ordenes: {exc}"))
-
-    def ordenes_todas(self):
-        filas = []
-        for broker, cliente, decorar in (
-            ("mexc", self.cliente("mexc"), decorate_orders),
-            ("bitunix", self.cliente("bitunix"), decorate_orders_bitunix),
-            ("bingx", self.cliente("bingx"), decorate_orders_bingx),
-        ):
-            if cliente is None:
-                continue
-            try:
-                ordenes = cliente.open_orders()
-                filas_broker = decorar(cliente, ordenes)
-                if broker == "mexc":
-                    for orden in filas_broker:
-                        orden["_exchange"] = broker
-                filas.extend(filas_broker)
-            except Exception as exc:
-                self._error_consulta("ordenes", broker, exc)
-        return filas
-
     def refresh_saldos(self):
         """Saldo total de cada broker conectado (libre + margen en uso).
 
@@ -421,18 +362,21 @@ class Session:
         numero chico (14,79 de 313,24) parecia un saldo roto.
         """
         saldos = dict(self.saldos)
-        for nombre, cliente in (
-            ("mexc", self.cliente("mexc")),
-            ("bitunix", self.cliente("bitunix")),
-            ("bingx", self.cliente("bingx")),
-        ):
+
+        def leer_saldo(nombre):
+            cliente = self.cliente(nombre)
             if cliente is None:
-                continue
+                return nombre, None
             try:
                 leer = getattr(cliente, "saldo", None) or cliente.available
-                saldos[nombre] = float(leer())
+                return nombre, float(leer())
             except Exception as exc:
                 self.q.put(("error", f"saldo {nombre}: {exc}"))
+                return nombre, None
+
+        for nombre, valor in en_paralelo(leer_saldo, BROKERS, 3):
+            if valor is not None:
+                saldos[nombre] = valor
         self.saldos = saldos
         self.q.put(("balances", dict(saldos)))
 
@@ -441,17 +385,24 @@ class Session:
         pares = {(t.get("exchange") or "", t["symbol"]) for t in self.tarjetas if t.get("exchange")}
         for pos in self.ultimas_posiciones:
             pares.add((pos.get("_exchange") or "", pos.get("symbol") or ""))
-        for exchange, symbol in pares:
+
+        def leer_fondo(par):
+            exchange, symbol = par
             cliente = self.cliente(exchange)
             if cliente is None or not symbol:
-                continue
+                return None
             try:
-                datos = cliente.funding(symbol)
+                return par, cliente.funding(symbol)
             except Exception as exc:
                 self.q.put(("error", f"funding {symbol}: {exc}"))
+                return None
+
+        for resultado in en_paralelo(leer_fondo, sorted(pares), 3):
+            if not resultado:
                 continue
+            par, datos = resultado
             if datos:
-                self.fondos[(exchange, symbol)] = datos
+                self.fondos[par] = datos
         if self.fondos:
             self.q.put(("funding", dict(self.fondos)))
 
@@ -631,6 +582,10 @@ class Session:
                         else:
                             cambio = float(datos.get("riseFallRate") or 0) * 100
                         if precio:
+                            self.precios_par[(exchange, _clave_mercado(tarjeta["symbol"]))] = (
+                                precio,
+                                time.monotonic(),
+                            )
                             with self._candado_tarjetas:
                                 sigue_seleccionado = any(
                                     actual["id"] == tarjeta["id"]

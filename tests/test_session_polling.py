@@ -1,5 +1,6 @@
 import queue
 import threading
+import time
 
 from tradedesk import session as session_module
 from tradedesk.session import Session
@@ -25,7 +26,19 @@ def _session():
     app._parar = StopAfterWait()
     app.q = queue.Queue()
     app._candado_tarjetas = threading.Lock()
+    app.precios_par = {}
     return app
+
+
+def test_el_precio_guardado_sirve_solo_si_es_fresco():
+    """Un precio viejo no puede decidir el lado del TP/SL: mejor no usarlo."""
+    app = _session()
+    app.precios_par = {("mexc", "BTCUSDT"): (100.0, time.monotonic())}
+
+    assert app.precio_de("mexc", "BTC_USDT") == 100.0
+
+    app.precios_par[("mexc", "BTCUSDT")] = (100.0, time.monotonic() - 10)
+    assert app.precio_de("mexc", "BTC_USDT") is None
 
 
 def test_poller_de_ticker_no_consulta_posiciones_ni_ordenes():
@@ -44,6 +57,8 @@ def test_poller_de_ticker_no_consulta_posiciones_ni_ordenes():
     app._poll("mexc")
 
     assert app.precios == {"BTC_USDT": 100}
+    # el precio tambien queda por par y broker: lo usan las órdenes y el TP/SL
+    assert app.precios_par[("mexc", "BTCUSDT")][0] == 100
     assert app.q.get_nowait() == ("ticker", "BTC_USDT", "mexc", 100, 1)
 
 
@@ -130,6 +145,7 @@ def test_un_broker_colgado_no_congela_los_precios_de_los_demas():
     app._parar = threading.Event()
     app._candado_tarjetas = threading.Lock()
     app.precios = {}
+    app.precios_par = {}
     app.tarjetas = [
         {"symbol": "BTC_USDT", "id": "BTC_USDT", "exchange": "mexc"},
         {"symbol": "BTC_USDT", "id": "BTC_USDT#2", "exchange": "bitunix"},
