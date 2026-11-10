@@ -62,6 +62,11 @@ Cada hilo de precios va a **~1.4 req/s** de su broker (0.70 s entre requests) co
 multiplicativo (0.70 s → 5.0 s) si algo falla. El ritmo se mantiene por broker, así que
 bajar esos tiempos produce `510 Demasiadas peticiones`.
 
+**Lotes (ENVIAR TODAS y CERRAR TODO): los brokers salen en paralelo y las tarjetas de un
+mismo broker van en serie.** Cada apertura gasta ticker + apalancamiento + orden, así que
+dentro de un broker las peticiones comparten el mismo límite; entre brokers no hay nada
+compartido. Los resultados siempre se ordenan por tarjeta, no por llegada.
+
 **TP/SL: la dirección se mide contra el precio actual, no contra la entrada.**
 LONG → TP por encima y SL por debajo; SHORT al revés. Un `stopLossPrice` del lado
 de la ganancia se rechaza con **5003** aunque esté lejos; ese mismo nivel sí entra

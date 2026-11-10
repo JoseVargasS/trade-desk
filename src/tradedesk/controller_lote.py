@@ -1,6 +1,8 @@
-"""Envío secuencial de varias órdenes con una confirmación."""
+"""Envío de varias órdenes con una confirmación: los brokers en paralelo."""
 
 import threading
+
+from .ritmo import en_paralelo
 
 
 def resumen_lote(resultados, dry):
@@ -72,16 +74,39 @@ class LoteMixin:
         return True
 
     def _do_abrir_lote(self, items, dry):
+        items = list(items or ())
         resultados = []
+
+        def enviar_una(indice, item):
+            salida = []
+            try:
+                self._do_abrir(
+                    item["side"],
+                    item["form"],
+                    dry,
+                    item["exchange"],
+                    lote=salida,
+                    refrescar=False,
+                )
+            except Exception as exc:
+                self.session.log(f"ERR lote {item['side']} {item['form']['symbol']}: {exc}")
+                salida.append((item["form"]["symbol"], item["side"], "rechazada", str(exc)))
+            return indice, salida
+
+        def enviar_broker(grupo):
+            return [enviar_una(indice, item) for indice, item in grupo]
+
         try:
-            for item in items:
-                side = item["side"]
-                form = item["form"]
-                exchange = item["exchange"]
-                try:
-                    self._do_abrir(side, form, dry, exchange, lote=resultados)
-                except Exception as exc:
-                    self.session.log(f"ERR lote {side} {form['symbol']}: {exc}")
-                    resultados.append((form["symbol"], side, "rechazada", str(exc)))
+            por_broker = {}
+            for indice, item in enumerate(items):
+                por_broker.setdefault(item["exchange"], []).append((indice, item))
+            # Los brokers salen a la vez (cada uno con su límite). Dentro de un
+            # broker van en orden: ahí sí comparten ticker, apalancamiento y ordenes.
+            salidas = en_paralelo(enviar_broker, list(por_broker.values()), 3)
+            # el resumen se arma por índice de tarjeta, no por orden de llegada
+            ordenadas = [salida for grupo in salidas for salida in grupo]
+            resultados = [fila for _indice, salida in sorted(ordenadas) for fila in salida]
         finally:
+            self.session.refresh_positions()
+            self.session.refresh_orders()
             self.q.put(("lote", {"dry": dry, "resultados": resultados}))

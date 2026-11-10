@@ -1,4 +1,6 @@
 import queue
+import threading
+import time
 import types
 
 import httpx
@@ -225,3 +227,67 @@ def test_excepcion_inesperada_tambien_publica_resultado_de_lote(monkeypatch):
     lotes = _mensajes(control, "lote")
     assert len(lotes) == 1
     assert lotes[0][1]["resultados"][0][2:] == ("rechazada", "error inesperado")
+
+
+class ClienteLento:
+    """Abre con demora y anota cuantas aperturas corren a la vez."""
+
+    def __init__(self, nombre, candado, estado):
+        self.nombre, self.candado, self.estado = nombre, candado, estado
+        self.sent = []
+
+    def price(self, _symbol):
+        return 100
+
+    def size_to_vol(self, _symbol, notional, _price):
+        return notional
+
+    def open_market(self, symbol, *_args):
+        with self.candado:
+            self.estado["dentro"] += 1
+            self.estado["maximo"] = max(self.estado["maximo"], self.estado["dentro"])
+        time.sleep(0.1)
+        with self.candado:
+            self.estado["dentro"] -= 1
+        self.sent.append(symbol)
+        return {"orderId": f"id-{symbol}"}, 50, 100
+
+
+def _control_dos_brokers(monkeypatch):
+    from tradedesk import controller as controller_mod
+    from tradedesk import controller_lote as lote_mod
+
+    fake = types.SimpleNamespace(Thread=InlineThread)
+    monkeypatch.setattr(controller_mod, "threading", fake)
+    monkeypatch.setattr(lote_mod, "threading", fake)
+    candado, estado = threading.Lock(), {"dentro": 0, "maximo": 0}
+    cliente = ClienteLento("mexc", candado, estado)
+    otro = ClienteLento("bitunix", candado, estado)
+    session = FakeSession(cliente)
+    session.mex = cliente
+    session.bitunix = otro
+    session.cliente = lambda exchange: {"mexc": cliente, "bitunix": otro}.get(exchange)
+    session.estado = estado
+    return Control(session, FakePort(), dry=lambda: False), (cliente, otro, session)
+
+
+def test_brokers_en_paralelo_y_cada_broker_en_serie(monkeypatch):
+    control, (mexc, bitunix, session) = _control_dos_brokers(monkeypatch)
+
+    items = [
+        {"side": "LONG", "form": _form("BTC_USDT"), "exchange": "mexc"},
+        {"side": "LONG", "form": _form("ETH_USDT"), "exchange": "bitunix"},
+        {"side": "SHORT", "form": _form("SOL_USDT"), "exchange": "mexc"},
+        {"side": "SHORT", "form": _form("ADA_USDT"), "exchange": "bitunix"},
+    ]
+    control.abrir_lote(items)
+
+    # cada broker manda en orden... y los dos a la vez
+    assert mexc.sent == ["BTC_USDT", "SOL_USDT"]
+    assert bitunix.sent == ["ETH_USDT", "ADA_USDT"]
+    assert session.estado["maximo"] == 2
+
+    resultados = _mensajes(control, "lote")[0][1]["resultados"]
+    assert [fila[0] for fila in resultados] == [item["form"]["symbol"] for item in items]
+    assert [fila[2] for fila in resultados] == ["ok"] * 4
+    assert session.refrescos == ["positions", "orders"]

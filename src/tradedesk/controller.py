@@ -141,7 +141,7 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
             target=self._do_abrir, args=(side, form, dry, exchange), daemon=True
         ).start()
 
-    def _do_abrir(self, side, form, dry, exchange="mexc", lote=None):
+    def _do_abrir(self, side, form, dry, exchange="mexc", lote=None, refrescar=True):
         symbol = form["symbol"]
         mx = None
         verificacion = None
@@ -198,14 +198,16 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
             self.q.put(("closed", mensaje))
             self._aviso_orden(lote, symbol, side, "ok", ("Orden enviada", mensaje, False))
             # una limite sin llenar no abre posicion: hay que refrescar ordenes
-            self.session.refresh_positions()
-            self.session.refresh_orders()
+            if refrescar:
+                self.session.refresh_positions()
+                self.session.refresh_orders()
         except Exception as exc:
             incierto = not dry and self._resultado_desconocido(exc)
             if incierto:
                 mensaje = self._mensaje_desconocido("abrir")
-                self.session.refresh_positions()
-                self.session.refresh_orders()
+                if refrescar:
+                    self.session.refresh_positions()
+                    self.session.refresh_orders()
                 if mx is not None:
                     lado = 1 if side.upper() == "LONG" else 2
 
