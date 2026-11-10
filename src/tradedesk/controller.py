@@ -15,6 +15,7 @@ import time
 import httpx
 
 from . import theme as t
+from .controller_lote import LoteMixin
 from .controller_ordenes import OrdenesMixin
 from .controller_tpsl import TpslMixin
 from .controller_verificacion import VerificacionMixin
@@ -25,7 +26,7 @@ class BrokerNoDisponibleError(RuntimeError):
     pass
 
 
-class Control(VerificacionMixin, TpslMixin, OrdenesMixin):
+class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
     """Acciones de la mesa. `dry` es un callable: DRY-RUN siempre arranca prendido."""
 
     VERIFICACION_INTERVALO = 2.0
@@ -104,6 +105,12 @@ class Control(VerificacionMixin, TpslMixin, OrdenesMixin):
         """Cliente del broker de esa posición u orden (MEXC si no dice nada)."""
         return self._cliente_de((objeto or {}).get("_exchange") or defecto)
 
+    def _aviso_orden(self, lote, symbol, side, estado, aviso):
+        if lote is None:
+            self.q.put(("notice", aviso))
+            return
+        lote.append((symbol, side, estado, aviso[1]))
+
     def abrir(self, side, form, al_enviar=None, exchange="mexc"):
         """Confirma y envía la orden de la tarjeta (mercado o límite)."""
         price = form.get("price")
@@ -132,7 +139,7 @@ class Control(VerificacionMixin, TpslMixin, OrdenesMixin):
             target=self._do_abrir, args=(side, form, dry, exchange), daemon=True
         ).start()
 
-    def _do_abrir(self, side, form, dry, exchange="mexc"):
+    def _do_abrir(self, side, form, dry, exchange="mexc", lote=None):
         symbol = form["symbol"]
         mx = None
         verificacion = None
@@ -153,15 +160,16 @@ class Control(VerificacionMixin, TpslMixin, OrdenesMixin):
                 self.session.log("OK  " + mensaje)
                 self.q.put(("order", (True, mensaje)))
                 self.q.put(("closed", mensaje))
-                self.q.put(
+                self._aviso_orden(
+                    lote,
+                    symbol,
+                    side,
+                    "ok",
                     (
-                        "notice",
-                        (
-                            "DRY-RUN: no se envio nada",
-                            mensaje + "\n\nApaga DRY-RUN para operar de verdad.",
-                            False,
-                        ),
-                    )
+                        "DRY-RUN: no se envio nada",
+                        mensaje + "\n\nApaga DRY-RUN para operar de verdad.",
+                        False,
+                    ),
                 )
                 return
             volumen_anterior = self._volumen_cache(
@@ -186,7 +194,7 @@ class Control(VerificacionMixin, TpslMixin, OrdenesMixin):
             self.session.log("OK  " + mensaje)
             self.q.put(("order", (True, mensaje)))
             self.q.put(("closed", mensaje))
-            self.q.put(("notice", ("Orden enviada", mensaje, False)))
+            self._aviso_orden(lote, symbol, side, "ok", ("Orden enviada", mensaje, False))
             # una limite sin llenar no abre posicion: hay que refrescar ordenes
             self.session.refresh_positions()
             self.session.refresh_orders()
@@ -214,18 +222,21 @@ class Control(VerificacionMixin, TpslMixin, OrdenesMixin):
                     verificacion = comprobar
                 titulo = "Estado de la orden desconocido"
                 detalle_log = type(exc).__name__
+                estado = "desconocida"
             elif isinstance(exc, BrokerNoDisponibleError):
                 mensaje = str(exc)
                 titulo = "Broker no disponible"
                 detalle_log = type(exc).__name__
+                estado = "broker"
             else:
                 mensaje = str(exc)
                 titulo = "Orden rechazada"
                 detalle_log = mensaje
+                estado = "rechazada"
             self.session.log(f"ERR {side} {symbol}: {detalle_log}")
             self.q.put(("order", (False, mensaje)))
             self.q.put(("closed", mensaje))
-            self.q.put(("notice", (titulo, mensaje, True)))
+            self._aviso_orden(lote, symbol, side, estado, (titulo, mensaje, True))
             if verificacion:
                 self._iniciar_verificacion("apertura", verificacion)
 
