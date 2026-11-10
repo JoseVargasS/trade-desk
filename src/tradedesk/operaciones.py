@@ -88,7 +88,37 @@ def _media_ponderada(pares):
     return sum(precio * cantidad for precio, cantidad in pares) / total
 
 
-def _fila(base, lado, qty, entrada, salida, pnl, fee, apertura, cierre, abierta, cerrada, clave=""):
+def _order_id(orden):
+    ident = orden.get("orderId")
+    return str(ident) if ident not in (None, "") else None
+
+
+def _order_ids(ordenes):
+    vistos = set()
+    ids = []
+    for orden in ordenes:
+        ident = _order_id(orden)
+        if ident is not None and ident not in vistos:
+            vistos.add(ident)
+            ids.append(ident)
+    return ids
+
+
+def _fila(
+    base,
+    lado,
+    qty,
+    entrada,
+    salida,
+    pnl,
+    fee,
+    apertura,
+    cierre,
+    abierta,
+    cerrada,
+    clave="",
+    ordenes=(),
+):
     if cerrada <= TOL:
         estado = "Abierta"
     elif cerrada >= qty - max(TOL, qty * 1e-9):
@@ -111,6 +141,7 @@ def _fila(base, lado, qty, entrada, salida, pnl, fee, apertura, cierre, abierta,
         "estado": estado,
         "_clave": clave,
         "_orden": apertura or cierre,
+        "_ordenes": list(ordenes),
     }
 
 
@@ -139,6 +170,7 @@ def _fila_de_grupo(ordenes, clave):
         abierta,
         cerrada,
         clave,
+        _order_ids(ordenadas),
     )
 
 
@@ -158,6 +190,7 @@ def _fila_de_lote(lote):
         lote["qty"],
         cerrada,
         lote["clave"],
+        lote["ordenes"],
     )
 
 
@@ -185,6 +218,7 @@ def _filas_por_cola(ordenes):
                     "cerrada": 0.0,
                     "pnl": 0.0,
                     "fee": _fee(orden),
+                    "ordenes": [_order_id(orden)] if _order_id(orden) is not None else [],
                 }
             )
             continue
@@ -199,6 +233,9 @@ def _filas_por_cola(ordenes):
                 continue
             toma = min(hueco, restante)
             parte = toma / cantidad if cantidad > TOL else 1.0
+            order_id = _order_id(orden)
+            if order_id is not None and order_id not in lote["ordenes"]:
+                lote["ordenes"].append(order_id)
             lote["cerrada"] += toma
             lote["salida"] += toma * _precio(orden)
             lote["pnl"] += pnl * parte
@@ -222,6 +259,7 @@ def _filas_por_cola(ordenes):
                     restante,
                     f"cierre|{_exchange(orden)}|{orden.get('symbol') or ''}|{_ms(orden)}"
                     f"|{lado}|{restante:g}",
+                    [_order_id(orden)] if _order_id(orden) is not None else [],
                 )
             )
     for grupo in lotes.values():

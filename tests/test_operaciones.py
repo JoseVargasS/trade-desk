@@ -88,6 +88,7 @@ def test_cierre_sin_apertura_no_se_pierde():
     assert len(filas) == 1
     assert filas[0]["estado"] == "Cerrada"
     assert filas[0]["entrada"] == 0
+    assert filas[0]["_ordenes"] == []
     assert abs(filas[0]["pnl"] - 0.0016) < 1e-9
 
 

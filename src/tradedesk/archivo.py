@@ -211,6 +211,58 @@ class Archivo:
             for campo in ("qty", "abierta", "cerrada")
         )
 
+    @staticmethod
+    def _ordenes(fila):
+        return {str(ident) for ident in fila.get("_ordenes", ()) if ident not in (None, "")}
+
+    @classmethod
+    def _indice_ordenes(cls, filas):
+        indice = {}
+        for clave, fila in filas.items():
+            for ident in cls._ordenes(fila):
+                indice.setdefault(ident, set()).add(clave)
+        return indice
+
+    @classmethod
+    def _cambiar_indice(cls, indice, clave, ordenes, agregar):
+        for ident in ordenes:
+            claves = indice.setdefault(ident, set())
+            if agregar:
+                claves.add(clave)
+            else:
+                claves.discard(clave)
+                if not claves:
+                    del indice[ident]
+
+    @classmethod
+    def _subconjunto_de_archivada(cls, ordenes, fila, clave, indice, filas):
+        if not ordenes:
+            return False
+        primer_id = next(
+            (str(ident) for ident in fila.get("_ordenes", ()) if ident not in (None, "")),
+            None,
+        )
+        if primer_id is None:
+            return False
+        for otra_clave in indice.get(primer_id, ()):
+            if otra_clave == clave:
+                continue
+            otras = cls._ordenes(filas[otra_clave])
+            if ordenes < otras:
+                return True
+        return False
+
+    def _quitar_ordenes_duplicadas(self, indice):
+        borrar = [
+            clave
+            for clave, fila in self.filas.items()
+            if self._subconjunto_de_archivada(self._ordenes(fila), fila, clave, indice, self.filas)
+        ]
+        for clave in borrar:
+            self._cambiar_indice(indice, clave, self._ordenes(self.filas[clave]), False)
+            del self.filas[clave]
+        return bool(borrar)
+
     def _quitar_cierres_huerfanos_duplicados(self):
         cierres = [
             fila
@@ -242,16 +294,27 @@ class Archivo:
     def fusionar(self, nuevas):
         """Guarda las operaciones nuevas o cambiadas y devuelve todo lo archivado."""
         cambio = False
+        indice = self._indice_ordenes(self.filas)
         for fila in nuevas or ():
             clave = fila.get("_clave")
             if not clave:
                 continue
             anterior = self.filas.get(clave)
+            ordenes = self._ordenes(fila)
+            ordenes_anteriores = self._ordenes(anterior) if anterior else set()
+            if ordenes and ordenes_anteriores and ordenes < ordenes_anteriores:
+                continue
             if anterior and self._menos_completa(fila, anterior):
                 continue
+            if self._subconjunto_de_archivada(ordenes, fila, clave, indice, self.filas):
+                continue
             if self.filas.get(clave) != fila:
+                if anterior:
+                    self._cambiar_indice(indice, clave, ordenes_anteriores, False)
                 self.filas[clave] = fila
+                self._cambiar_indice(indice, clave, ordenes, True)
                 cambio = True
+        cambio = self._quitar_ordenes_duplicadas(indice) or cambio
         cambio = self._quitar_cierres_huerfanos_duplicados() or cambio
         if cambio:
             self._guardar()
