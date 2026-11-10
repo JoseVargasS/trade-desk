@@ -26,6 +26,8 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+# segundos que el apalancamiento puesto se da por bueno (antes se reenvía)
+APALANCAMIENTO_MAX_EDAD = 60.0
 
 
 class BitunixError(Exception):
@@ -186,6 +188,7 @@ class Bitunix:
         self._cliente = None
         self._contratos = {}
         self._precios = {}
+        self._apalancamiento = {}
         self._modo = ""
         self.on_error = None
 
@@ -395,6 +398,20 @@ class Bitunix:
             },
         )
 
+    def _fijar_apalancamiento(self, simbolo, leverage):
+        """El apalancamiento ya puesto no se vuelve a poner (cada viaje cuesta).
+
+        Pasado `APALANCAMIENTO_MAX_EDAD` se vuelve a aplicar: si el usuario lo
+        cambió en el exchange, la app no debe mandar el viejo.
+        """
+        clave = canonico(simbolo)
+        puesto = self._apalancamiento.get(clave)
+        ahora = time.monotonic()
+        if puesto and puesto[0] == int(leverage) and ahora - puesto[1] < APALANCAMIENTO_MAX_EDAD:
+            return
+        self.change_leverage(simbolo, leverage)
+        self._apalancamiento[clave] = (int(leverage), ahora)
+
     # compatibilidad con la interfaz (misma superficie que Mexc)
     def size_to_vol(self, simbolo, nocional_usdt, price, contract=None):
         return self.size_to_qty(simbolo, nocional_usdt, price)
@@ -410,13 +427,28 @@ class Bitunix:
         escala = int(self.contract(simbolo).get("priceScale") or 4)
         return f"{float(precio):.{escala}f}"
 
-    def open_market(self, simbolo, long_, nocional, leverage, tipo, tp=None, sl=None, precio=None):
-        """Abre a mercado o límite. Misma firma y salida que `Mexc.open_market`."""
+    def open_market(
+        self,
+        simbolo,
+        long_,
+        nocional,
+        leverage,
+        tipo,
+        tp=None,
+        sl=None,
+        precio=None,
+        precio_ref=None,
+    ):
+        """Abre a mercado o límite. Misma firma y salida que `Mexc.open_market`.
+
+        `precio_ref` es el precio que ya conoce la app (el de la tarjeta): con
+        el se ahorra el ticker extra.
+        """
         symbol = canonico(simbolo)
-        px = float(precio or 0) or self.price(symbol)
+        px = float(precio or 0) or float(precio_ref or 0) or self.price(symbol)
         if not px:
             raise BitunixError("Sin precio para calcular la cantidad")
-        self.change_leverage(symbol, leverage)
+        self._fijar_apalancamiento(symbol, leverage)
         qty = self.size_to_qty(symbol, nocional, px)
         if qty <= 0:
             raise BitunixError("La cantidad quedó en 0: subí el tamaño")

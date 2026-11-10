@@ -55,6 +55,24 @@ def test_abrir_a_mercado_ignora_un_precio_vacio(mx):
     assert payload["price"] == 100.0, "precio de mercado"
 
 
+def test_el_precio_de_referencia_ahorra_el_ticker_al_abrir(mx):
+    """Con el precio que ya tiene la app no hace falta un ticker extra."""
+    mx.price = lambda _symbol: (_ for _ in ()).throw(AssertionError("ticker extra"))
+
+    _, _vol, px = mx.open_market("XAU_USDT", "LONG", 100, 10, precio_ref=123.45)
+
+    assert px == 123.45
+    assert mx.sent[-1][1]["price"] == 123.45
+
+
+def test_el_precio_de_referencia_ahorra_el_ticker_al_cerrar(mx, posicion):
+    mx.price = lambda _symbol: (_ for _ in ()).throw(AssertionError("ticker extra"))
+
+    mx.close_position(posicion, precio_ref=123.45)
+
+    assert mx.sent[-1][1]["price"] == 123.45
+
+
 def test_cerrar_todo_a_mercado(mx, posicion):
     mx.close_position(posicion)
 

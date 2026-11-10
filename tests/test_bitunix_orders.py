@@ -4,6 +4,8 @@ Sin red: se intercepta `_post` y se miran las rutas y el cuerpo. La red se prueb
 a mano con `tools/probe_bitunix.py`.
 """
 
+import time
+
 import pytest
 
 from tradedesk.bitunix import Bitunix, BitunixError, canonico, con_guion
@@ -324,3 +326,45 @@ def test_cambio_de_margen():
         "symbol": "BTCUSDT",
         "side": "LONG",
     }
+
+
+def test_el_apalancamiento_no_se_reenvia_si_ya_esta_puesto():
+    """El apalancamiento es un viaje por par: si no cambió, no se repite."""
+    cliente, enviados = armado()
+
+    cliente.open_market("BTC_USDT", True, 100.0, 10, 5)
+    cliente.open_market("BTC_USDT", True, 100.0, 10, 5)
+
+    cambios = [cuerpo for ruta, cuerpo in enviados if ruta.endswith("/change_leverage")]
+    assert len(cambios) == 1
+
+
+def test_el_apalancamiento_se_reenvia_si_cambia():
+    cliente, enviados = armado()
+
+    cliente.open_market("BTC_USDT", True, 100.0, 10, 5)
+    cliente.open_market("BTC_USDT", True, 100.0, 20, 5)
+
+    cambios = [cuerpo for ruta, cuerpo in enviados if ruta.endswith("/change_leverage")]
+    assert [c["leverage"] for c in cambios] == [10, 20]
+
+
+def test_el_apalancamiento_se_reenvia_tras_la_edad_maxima():
+    """Si el usuario lo cambió en el exchange, la app tiene que mandar el suyo."""
+    cliente, enviados = armado()
+    cliente.open_market("BTC_USDT", True, 100.0, 10, 5)
+    cliente._apalancamiento["BTCUSDT"] = (10, time.monotonic() - 61)
+
+    cliente.open_market("BTC_USDT", True, 100.0, 10, 5)
+
+    cambios = [cuerpo for ruta, cuerpo in enviados if ruta.endswith("/change_leverage")]
+    assert len(cambios) == 2
+
+
+def test_el_precio_de_referencia_ahorra_el_ticker():
+    cliente, _enviados = armado()
+    cliente.price = lambda _simbolo: (_ for _ in ()).throw(AssertionError("ticker extra"))
+
+    _, _qty, px = cliente.open_market("BTC_USDT", True, 100.0, 10, 5, precio_ref=60000.0)
+
+    assert px == 60000.0

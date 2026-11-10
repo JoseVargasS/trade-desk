@@ -6,6 +6,7 @@ La API real se prueba a mano con `tools/probe_bingx.py`.
 
 import hashlib
 import hmac
+import time
 
 import pytest
 
@@ -13,11 +14,13 @@ from tradedesk.bingx import (
     Bingx,
     BingxError,
     canonico,
+    display_name,
+    largo,
+)
+from tradedesk.bingx_comun import (
     decorate_orders,
     decorate_positions,
-    display_name,
     es_condicional,
-    largo,
 )
 
 CONTRATO = {
@@ -462,3 +465,45 @@ def test_el_apalancamiento_de_una_orden_llega_como_numero():
     fila = decorate_orders(cliente, ordenes)[0]
     assert fila["leverage"] == 10
     assert isinstance(fila["leverage"], int)
+
+
+def test_el_apalancamiento_no_se_reenvia_si_ya_esta_puesto():
+    """El apalancamiento es un viaje por par y lado: si no cambió, no se repite."""
+    cliente, enviados = armado()
+
+    cliente.open_market("BTC_USDT", "LONG", 100.0, 10, 1)
+    cliente.open_market("BTC_USDT", "LONG", 100.0, 10, 1)
+
+    cambios = [cuerpo for _metodo, ruta, cuerpo in enviados if ruta.endswith("/trade/leverage")]
+    assert len(cambios) == 1
+
+
+def test_el_apalancamiento_se_reenvia_si_cambia():
+    cliente, enviados = armado()
+
+    cliente.open_market("BTC_USDT", "LONG", 100.0, 10, 1)
+    cliente.open_market("BTC_USDT", "LONG", 100.0, 20, 1)
+
+    cambios = [cuerpo for _metodo, ruta, cuerpo in enviados if ruta.endswith("/trade/leverage")]
+    assert [c["leverage"] for c in cambios] == [10, 20]
+
+
+def test_el_apalancamiento_se_reenvia_tras_la_edad_maxima():
+    """Si el usuario lo cambió en el exchange, la app tiene que mandar el suyo."""
+    cliente, enviados = armado()
+    cliente.open_market("BTC_USDT", "LONG", 100.0, 10, 1)
+    cliente._apalancamiento[("BTC-USDT", "LONG")] = (10, time.monotonic() - 61)
+
+    cliente.open_market("BTC_USDT", "LONG", 100.0, 10, 1)
+
+    cambios = [cuerpo for _metodo, ruta, cuerpo in enviados if ruta.endswith("/trade/leverage")]
+    assert len(cambios) == 2
+
+
+def test_el_precio_de_referencia_ahorra_el_ticker():
+    cliente, _enviados = armado()
+    cliente.price = lambda _simbolo: (_ for _ in ()).throw(AssertionError("ticker extra"))
+
+    _, _qty, px = cliente.open_market("BTC_USDT", "LONG", 100.0, 10, 1, precio_ref=60000.0)
+
+    assert px == 60000.0

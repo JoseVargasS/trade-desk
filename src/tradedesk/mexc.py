@@ -334,7 +334,11 @@ def decorate_orders(mx, orders):
 
 
 class MexcError(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        # el codigo del broker: permite reconocer un error concreto (5004) sin
+        # adivinar por el texto
+        self.code = code
 
 
 class Mexc:
@@ -373,8 +377,9 @@ class Mexc:
             raise MexcError("Respuesta invalida de MEXC.")
         if data.get("success") is not True:
             code = data.get("code")
-            msg = ERRORES.get(code) or data.get("message") or f"code={code}"
-            raise MexcError(msg)
+            clave = int(code) if isinstance(code, str) and code.isdigit() else code
+            msg = ERRORES.get(clave) or data.get("message") or f"code={code}"
+            raise MexcError(msg, code=code)
         return data.get("data")
 
     def _post(self, path, payload):
@@ -534,20 +539,30 @@ class Mexc:
         return {}
 
     def open_market(
-        self, symbol, side, notional_usdt, leverage, open_type=1, tp=None, sl=None, price=None
+        self,
+        symbol,
+        side,
+        notional_usdt,
+        leverage,
+        open_type=1,
+        tp=None,
+        sl=None,
+        price=None,
+        precio_ref=None,
     ):
         """side: 'LONG' o 'SHORT'. notional_usdt = margen * apalancamiento.
 
         `price` vacio = a mercado (type 5) con el ultimo precio. Con precio =
         orden limite (type 1) a ese nivel; el tamano se convierte con ese precio,
-        no con el de mercado.
+        no con el de mercado. `precio_ref` es el precio que ya conoce la app
+        (el de la tarjeta): con el se ahorra el ticker extra.
         """
         if price:
             scale = int(self.contract(symbol).get("priceScale") or 0)
             px = round(float(price), scale)
             order_type = 1
         else:
-            px = self.price(symbol)
+            px = float(precio_ref or 0) or self.price(symbol)
             order_type = 5
         vol = self.size_to_vol(symbol, notional_usdt, px)
         payload = {
@@ -570,11 +585,13 @@ class Mexc:
                 payload["stopLossPrice"] = float(sl)
         return self._post("/api/v1/private/order/create", payload), vol, px
 
-    def close_position(self, pos, vol=None, price=None):
+    def close_position(self, pos, vol=None, price=None, precio_ref=None):
         """Cierra toda la posicion o una parte (`vol` en contratos).
 
         `price` vacio = a mercado (type 5). Con precio = orden limite (type 1)
         a ese nivel, redondeado a los decimales que admite el contrato.
+        `precio_ref` es el precio que ya conoce la app: con el se ahorra el
+        ticker extra.
         """
         hold = float(pos["holdVol"])
         vol = hold if vol is None else float(vol)
@@ -585,7 +602,7 @@ class Mexc:
             px = round(float(price), scale)
             order_type = 1
         else:
-            px = self.price(pos["symbol"])
+            px = float(precio_ref or 0) or self.price(pos["symbol"])
             order_type = 5
         # 4 cierra long / 2 cierra short
         side = 4 if int(pos["positionType"]) == 1 else 2
