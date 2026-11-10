@@ -4,8 +4,9 @@ import threading
 import time
 
 from . import theme as t
-from .bingx import es_condicional
+from .bingx_comun import es_condicional
 from .mexc import MexcError, es_editable
+from .ritmo import en_paralelo
 
 
 class OrdenesMixin:
@@ -61,7 +62,9 @@ class OrdenesMixin:
 
     def _cancel_varios(self, grupos):
         """Cancela por broker: Bitunix necesita el símbolo y MEXC no."""
-        for nombre, ids in grupos.items():
+
+        def cancelar(par):
+            nombre, ids = par
             try:
                 cliente = self._cliente_de(nombre)
                 cliente.cancel(ids)
@@ -70,6 +73,9 @@ class OrdenesMixin:
             except Exception as exc:
                 self.session.log(f"ERR cancelar {nombre}: {type(exc).__name__}")
                 self.q.put(("error", f"Error al cancelar en {nombre}: {exc}"))
+
+        # los brokers van a la vez: cada uno tiene su propio límite
+        en_paralelo(cancelar, list(grupos.items()), 3)
         self.session.refresh_orders()
 
     def modificar(self, order):
@@ -163,8 +169,12 @@ class OrdenesMixin:
             )
         self.session.refresh_orders()
 
-    def _wait_order_gone(self, order_id, timeout=2.5, cliente=None):
-        """Espera a que la orden cancelada desaparezca de `open_orders`."""
+    def _wait_order_gone(self, order_id, timeout=2.0, cliente=None):
+        """Espera a que la orden cancelada desaparezca de `open_orders`.
+
+        Sondear cada 0,5 s: son 4 consultas como máximo, contra las 8 que
+        salen con 0,35 s.
+        """
         dueno = cliente or self.mx
         fin = time.time() + timeout
         while time.time() < fin:
@@ -174,7 +184,7 @@ class OrdenesMixin:
                 return False
             if all(str(o.get("orderId")) != str(order_id) for o in abiertas):
                 return True
-            time.sleep(0.35)
+            time.sleep(0.5)
         return False
 
     def margen(self, pos):

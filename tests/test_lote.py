@@ -57,10 +57,10 @@ class FakeSession:
     def log(self, mensaje):
         self.logs.append(mensaje)
 
-    def refresh_positions(self):
+    def refresh_positions(self, broker=None):
         self.refrescos.append("positions")
 
-    def refresh_orders(self):
+    def refresh_orders(self, broker=None):
         self.refrescos.append("orders")
 
 

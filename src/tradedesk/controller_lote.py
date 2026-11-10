@@ -107,6 +107,7 @@ class LoteMixin:
             ordenadas = [salida for grupo in salidas for salida in grupo]
             resultados = [fila for _indice, salida in sorted(ordenadas) for fila in salida]
         finally:
+            # el aviso sale primero: el refresco puede tardar y las órdenes ya se mandaron
+            self.q.put(("lote", {"dry": dry, "resultados": resultados}))
             self.session.refresh_positions()
             self.session.refresh_orders()
-            self.q.put(("lote", {"dry": dry, "resultados": resultados}))

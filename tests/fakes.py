@@ -1,5 +1,8 @@
-"""Dobles de prueba: cliente MEXC sin red y datos de ejemplo."""
+"""Dobles de prueba: cliente MEXC sin red, mesa sin widgets y datos de ejemplo."""
 
+import queue
+
+from tradedesk import controller
 from tradedesk.mexc import Mexc
 
 
@@ -76,3 +79,86 @@ def posicion(**extra):
     }
     base.update(extra)
     return base
+
+
+class InlineThread:
+    """Hilo que corre en el acto: el test no espera a nadie."""
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self.target, self.args, self.kwargs = target, args or (), kwargs or {}
+
+    def start(self):
+        self.target(*self.args, **self.kwargs)
+
+
+class FakeSession:
+    """Sesión sin red: solo la cola, los precios y los refrescos."""
+
+    def __init__(self, mx):
+        self.mx = mx
+        self.q = queue.Queue()
+        self.precios = {}
+        self.avisos = []
+        self.refrescos = []
+
+    def log(self, msg):
+        pass
+
+    def refresh_positions(self, broker=None):
+        self.refrescos.append("positions")
+
+    def refresh_orders(self, broker=None):
+        self.refrescos.append("orders")
+
+    def contract_for(self, symbol):
+        return {}
+
+
+class FakePort:
+    """La ventana de la mesa, sin widgets: solo responde lo que se le pregunta."""
+
+    def __init__(self, confirmar=True):
+        self.confirmar = confirmar
+        self.avisos = []
+        self.mensajes = []
+
+    def confirm(self, *a, **k):
+        return self.confirmar
+
+    def show(self, titulo, mensaje, **k):
+        self.avisos.append(mensaje)
+
+    def form(self, *a, **k):
+        return None
+
+    def tpsl(self, pos, precio):
+        return None
+
+    def editar_orden(self, orden, contrato, a_vol):
+        return None
+
+    def be_lista(self, filas):
+        """Lo que devuelve la ventana de BE: los ids elegidos o None."""
+        self.filas_be = filas
+        return self.elegidas_be
+
+    def status(self, texto):
+        self.mensajes.append(texto)
+
+
+def control(mx, dry=False):
+    """Control con la mesa falsa: sin red y sin ventana."""
+    return controller.Control(FakeSession(mx), FakePort(), dry=lambda: dry)
+
+
+def form_abrir():
+    """Orden de mercado mínima, como la arma la tarjeta."""
+    return {
+        "symbol": "BTC_USDT",
+        "notional": 100,
+        "lev": 1,
+        "open_type": 1,
+        "tp": None,
+        "sl": None,
+        "price": None,
+    }

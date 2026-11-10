@@ -20,7 +20,7 @@ from .controller_ordenes import OrdenesMixin
 from .controller_tpsl import TpslMixin
 from .controller_verificacion import VerificacionMixin
 from .forms import volumen_cerrar
-from .ritmo import en_paralelo
+from .ritmo import RITMO_ORDEN, Ritmo, en_paralelo
 
 
 class BrokerNoDisponibleError(RuntimeError):
@@ -30,7 +30,10 @@ class BrokerNoDisponibleError(RuntimeError):
 class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
     """Acciones de la mesa. `dry` es un callable: DRY-RUN siempre arranca prendido."""
 
-    VERIFICACION_INTERVALO = 2.0
+    VERIFICACION_INTERVALO = 2.0  # espera cuando el broker no responde
+    # entre muestras: la primera va rápido (el broker ya puede haber aplicado
+    # el cambio) y después se espacia
+    VERIFICACION_ESPACIOS = (0.4, 1.0, 2.0, 3.0)
     VERIFICACION_MUESTRAS = 5
     CIERRE_ESPERA = 4.0
 
@@ -107,6 +110,19 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
         """Cliente del broker de esa posición u orden (MEXC si no dice nada)."""
         return self._cliente_de((objeto or {}).get("_exchange") or defecto)
 
+    def _precio_ref(self, exchange, symbol):
+        """Precio que la app ya tiene del par (el de la tarjeta), si sigue fresco.
+
+        Sirve para no pedir un ticker extra antes de cada orden.
+        """
+        buscar = getattr(self.session, "precio_de", None)
+        if not callable(buscar):
+            return None
+        try:
+            return buscar(exchange, symbol)
+        except Exception:
+            return None
+
     def _aviso_orden(self, lote, symbol, side, estado, aviso):
         if lote is None:
             self.q.put(("notice", aviso))
@@ -149,7 +165,7 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
             mx = self._cliente_de(exchange)
             precio = form.get("price")
             if dry:
-                px = precio or mx.price(symbol)
+                px = precio or self._precio_ref(exchange, symbol) or mx.price(symbol)
                 if exchange == "mexc":
                     vol = mx.size_to_vol(symbol, form["notional"], px)
                     unidad = "contratos"
@@ -187,6 +203,7 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
                 form["tp"],
                 form["sl"],
                 precio,
+                self._precio_ref(exchange, symbol),
             )
             order_id = (data or {}).get("orderId", "?")
             unidad = "contratos" if exchange == "mexc" else symbol.split("_")[0]
@@ -199,15 +216,15 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
             self._aviso_orden(lote, symbol, side, "ok", ("Orden enviada", mensaje, False))
             # una limite sin llenar no abre posicion: hay que refrescar ordenes
             if refrescar:
-                self.session.refresh_positions()
-                self.session.refresh_orders()
+                self.session.refresh_positions(exchange)
+                self.session.refresh_orders(exchange)
         except Exception as exc:
             incierto = not dry and self._resultado_desconocido(exc)
             if incierto:
                 mensaje = self._mensaje_desconocido("abrir")
                 if refrescar:
-                    self.session.refresh_positions()
-                    self.session.refresh_orders()
+                    self.session.refresh_positions(exchange)
+                    self.session.refresh_orders(exchange)
                 if mx is not None:
                     lado = 1 if side.upper() == "LONG" else 2
 
@@ -309,11 +326,10 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
         threading.Thread(target=self._do_cerrar, args=(positions,), daemon=True).start()
 
     def _do_cerrar(self, positions, vol=None, price=None):
-        failed, done = [], 0
-        incierto = False
-        verificaciones = []
+        positions = list(positions or ())
         single = len(positions) == 1  # solo el cierre de una fila lleva vol/precio
-        for i, pos in enumerate(positions):
+
+        def cerrar_una(indice, pos, ritmo):
             exchange = pos.get("_exchange") or "mexc"
             cliente = None
             lado = self._lado_posicion(pos, exchange)
@@ -322,17 +338,25 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
             ids_anteriores = self._ids_cache_ordenes(exchange)
             try:
                 cliente = self.broker_de(pos)
-                cliente.close_position(pos, vol if single else None, price if single else None)
-                done += 1
+                ritmo.esperar()
+                if exchange == "mexc":
+                    # MEXC manda el precio en el payload: se le pasa el que ya hay
+                    cliente.close_position(
+                        pos,
+                        vol if single else None,
+                        price if single else None,
+                        self._precio_ref(exchange, pos.get("symbol")),
+                    )
+                else:
+                    cliente.close_position(pos, vol if single else None, price if single else None)
                 self.session.log(
                     f"OK  cerrada {pos.get('symbol')} vol={vol or pos.get('holdVol')}"
                     f"{' limite ' + str(price) if price else ''}"
                 )
+                return indice, None, None, False
             except Exception as e:
                 if self._resultado_desconocido(e):
-                    incierto = True
                     mensaje = self._mensaje_desconocido("cerrar")
-                    failed.append(f"{pos.get('symbol')}: {mensaje}")
                     self.session.log(f"ERR cerrar {pos.get('symbol')}: {type(e).__name__}")
 
                     def comprobar(
@@ -360,19 +384,34 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
                             cierre=True,
                         )
 
-                    verificaciones.append(comprobar)
-                else:
-                    failed.append(f"{pos.get('symbol')}: {e}")
-                    self.session.log(f"ERR cerrar {pos.get('symbol')}: {e}")
-            if i < len(positions) - 1:
-                time.sleep(0.6)
+                    return indice, mensaje, comprobar, True
+                self.session.log(f"ERR cerrar {pos.get('symbol')}: {e}")
+                return indice, f"{pos.get('symbol')}: {e}", None, False
+
+        # Los brokers cierran a la vez (cada uno con su límite); dentro de un
+        # broker se respeta su ritmo de órdenes.
+        por_broker = {}
+        for indice, pos in enumerate(positions):
+            por_broker.setdefault(pos.get("_exchange") or "mexc", []).append((indice, pos))
+
+        def cerrar_broker(par):
+            nombre, grupo = par
+            ritmo = Ritmo(RITMO_ORDEN.get(nombre, 2))
+            return [cerrar_una(indice, pos, ritmo) for indice, pos in grupo]
+
+        grupos = en_paralelo(cerrar_broker, list(por_broker.items()), 3)
+        planos = sorted((fila for grupo in grupos for fila in grupo), key=lambda fila: fila[0])
+        failed = [fallo for _i, fallo, _comprobar, _inc in planos if fallo]
+        done = len(planos) - len(failed)
+        incierto = any(inc for _i, _fallo, _comprobar, inc in planos)
+        verificaciones = [comprobar for _i, _fallo, comprobar, _inc in planos if comprobar]
         msg = f"Cerradas {done}" + (f" · fallaron {len(failed)}" if failed else "")
         self.q.put(("closed", msg))
         if failed:
             self.q.put(("status", " | ".join(failed)))
-        self.session.refresh_positions()
+        self.session.refresh_positions(list(por_broker) or None)
         if incierto:
-            self.session.refresh_orders()
+            self.session.refresh_orders(list(por_broker) or None)
         for comprobar in verificaciones:
             self._iniciar_verificacion("cierre", comprobar)
 
@@ -395,9 +434,9 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
 
         def run():
             verificacion = None
+            exchange = pos.get("_exchange") or "mexc"
             try:
                 cliente = self.broker_de(pos)
-                exchange = pos.get("_exchange") or "mexc"
                 lado = self._lado_posicion(pos, exchange)
                 symbol = pos.get("symbol")
                 volumen = self._volumen_posicion(pos, exchange)
@@ -412,7 +451,7 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
                     self.session.log(f"ERR reverse {pos.get('symbol')}: {type(e).__name__}")
                     self.q.put(("closed", mensaje))
                     self.q.put(("status", mensaje))
-                    self.session.refresh_orders()
+                    self.session.refresh_orders(exchange)
                     if "cliente" in locals():
 
                         def comprobar():
@@ -427,7 +466,7 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
                 else:
                     self.session.log(f"ERR reverse {pos.get('symbol')}: {e}")
                     self.q.put(("closed", f"Error reverse: {e}"))
-            self.session.refresh_positions()
+            self.session.refresh_positions(exchange)
             if verificacion:
                 self._iniciar_verificacion("reverse", verificacion)
 
@@ -522,9 +561,10 @@ class Control(LoteMixin, VerificacionMixin, TpslMixin, OrdenesMixin):
                 self.q.put(("closed", " | ".join(fallos)))
             else:
                 self.q.put(("closed", "Todas las posiciones cerradas"))
-            self.session.refresh_positions()
+            tocados = [nombre for nombre, _ in self._brokers()]
+            self.session.refresh_positions(tocados or None)
             if incierto:
-                self.session.refresh_orders()
+                self.session.refresh_orders(tocados or None)
             for accion, comprobar in verificaciones:
                 self._iniciar_verificacion(accion, comprobar)
 
