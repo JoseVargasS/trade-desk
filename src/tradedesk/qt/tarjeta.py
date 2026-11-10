@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLineEdit,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
 from .. import theme as t
 from ..brokers import NOMBRES, TITULOS
 from ..forms import form_tarjeta
+from ..layout import TARJETA_H, TARJETA_W
 from . import dialogs
 from .cierre import BarraCierre
 from .style import Segmentado, fnt, logo, menu_estilo
@@ -43,6 +45,7 @@ class Tarjeta(QFrame):
         on_broker=None,
         on_arrastre=None,
         estado_mercado=None,
+        on_lado=None,
     ):
         super().__init__()
         self.tarjeta = tarjeta
@@ -52,6 +55,8 @@ class Tarjeta(QFrame):
         self.on_broker = on_broker or (lambda _c, _n: None)
         self.on_arrastre = on_arrastre or (lambda _c, _a, _p=None: None)
         self.estado_mercado = estado_mercado or (lambda _b, _s: None)
+        self.on_lado = on_lado or (lambda _c: None)
+        self._lado_lote = ""
         self.limite = 0.0
         self._presets = {}
         self._ocupado = False
@@ -60,7 +65,7 @@ class Tarjeta(QFrame):
         self._moviendo = False
         self.setObjectName("card")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedSize(286, 436)
+        self.setFixedSize(TARJETA_W, TARJETA_H)
 
         columna = QVBoxLayout(self)
         columna.setContentsMargins(12, 12, 12, 12)
@@ -172,6 +177,23 @@ class Tarjeta(QFrame):
         columna.addWidget(self.lbl_resumen)
         columna.addStretch(1)
 
+        fila_lote = QHBoxLayout()
+        fila_lote.setSpacing(4)
+        fila_lote.addWidget(_etiqueta("Lote", 10, muted=True))
+        self._grupo_lote = QButtonGroup(self)
+        self._grupo_lote.setExclusive(True)
+        self._botones_lote = {}
+        for texto in ("—", "LONG", "SHORT"):
+            boton_lote = _boton(texto, None, 24, size=11)
+            boton_lote.setCheckable(True)
+            self._grupo_lote.addButton(boton_lote)
+            boton_lote.clicked.connect(lambda _=False, valor=texto: self._elegir_lote(valor))
+            self._botones_lote[texto] = boton_lote
+            fila_lote.addWidget(boton_lote, 1)
+        self._botones_lote["—"].setChecked(True)
+        self._pintar_lote()
+        columna.addLayout(fila_lote)
+
         fila_botones = QHBoxLayout()
         fila_botones.setSpacing(8)
         self.btn_long = _boton("LONG", None, 34, t.GREEN, t.BG, t.R_CTRL, 14)
@@ -230,6 +252,33 @@ class Tarjeta(QFrame):
         self._ocupado = bool(activo)
         self.btn_long.setEnabled(not activo)
         self.btn_short.setEnabled(not activo)
+        for boton_lote in self._botones_lote.values():
+            boton_lote.setEnabled(not activo)
+
+    # ------------------------------------------------------------------- lote
+    def _elegir_lote(self, texto):
+        self._lado_lote = "" if texto == "—" else texto
+        self._pintar_lote()
+        self.on_lado(self)
+
+    def _pintar_lote(self):
+        colores = {"—": t.MUTED, "LONG": t.GREEN, "SHORT": t.RED}
+        for texto, boton_lote in self._botones_lote.items():
+            activo = boton_lote.isChecked()
+            boton_lote.setStyleSheet(
+                f"QPushButton {{ background: {t.SURFACE if activo else t.INPUT};"
+                f" color: {colores[texto] if activo else t.MUTED};"
+                f" border: 1px solid {t.BORDER}; border-radius: {t.R_CHIP}px; }}"
+                f"QPushButton:hover {{ border: 1px solid {t.MUTED}; }}"
+                f"QPushButton:disabled {{ color: {t.MUTED}; }}"
+            )
+
+    def lado_lote(self):
+        return self._lado_lote
+
+    def limpiar_lado_lote(self):
+        self._botones_lote["—"].setChecked(True)
+        self._elegir_lote("—")
 
     # ------------------------------------------------------------------ broker
     def broker(self):

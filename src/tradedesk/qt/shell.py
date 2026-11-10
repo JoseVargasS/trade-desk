@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme as t
+from ..layout import TARJETA_H, TARJETA_W
 from .style import fnt, qss
 
 COLUMNAS = (
@@ -52,7 +53,7 @@ def _tarjeta(nombre, precio, pnl):
     caja = QFrame()
     caja.setObjectName("card")
     caja.setAttribute(Qt.WA_StyledBackground, True)
-    caja.setFixedSize(286, 436)
+    caja.setFixedSize(TARJETA_W, TARJETA_H)
     columna = QVBoxLayout(caja)
     columna.setContentsMargins(12, 12, 12, 12)
     columna.setSpacing(6)
@@ -129,7 +130,7 @@ def build_window():
     deck = QScrollArea()
     deck.setWidgetResizable(True)
     deck.setFrameShape(QFrame.NoFrame)
-    deck.setFixedHeight(470)
+    deck.setFixedHeight(TARJETA_H + 34)
     contenido = QWidget()
     fila_tarjetas = QHBoxLayout(contenido)
     fila_tarjetas.setContentsMargins(0, 0, 0, 0)

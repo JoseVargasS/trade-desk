@@ -29,13 +29,14 @@ from PySide6.QtWidgets import (
 from .. import theme as t
 from ..brokers import NOMBRES, TITULOS
 from ..controller import Control
-from ..layout import OPER_COLS, POS_COLS
+from ..layout import OPER_COLS, POS_COLS, TARJETA_H, TARJETA_W
 from ..paths import ASSETS
 from ..session import Session
 from . import dialogs
 from .calendario import PestanaCalendario
 from .cells import Bocadillo, Spinner, tabla
 from .dialogs import QtPort
+from .lote import LoteDeck
 from .search import buscar
 from .style import barra_oscura, logo, qss
 from .style import boton as _boton
@@ -48,7 +49,9 @@ from .tarjeta import Tarjeta
 BROKERS = NOMBRES
 
 
-class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, QMainWindow):
+class VistaQt(
+    PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, LoteDeck, QMainWindow
+):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Trade Desk")
@@ -73,6 +76,8 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
         self._anims = {}
         self._lienzo = None
         self._tarjeta_enviando = None
+        self._lote_en_curso = False
+        self._lote_cartas = []
         self._avisos = []
         self._mostrando = False
         self._dry = True
@@ -252,7 +257,6 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
         )
 
     # --------------------------------------------------------- fila de tarjetas
-    TARJETA_W = 286
     TARJETA_GAP = 10
     ANIM_MS = 150
 
@@ -260,16 +264,20 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
         deck = QScrollArea()
         deck.setWidgetResizable(True)
         deck.setFrameShape(QFrame.NoFrame)
-        deck.setFixedHeight(470)
+        deck.setFixedHeight(TARJETA_H + 34)
         contenido = QWidget()
         fila = QHBoxLayout(contenido)
         fila.setContentsMargins(0, 0, 0, 0)
         fila.setSpacing(10)
         # las tarjetas se colocan a mano: así el arrastre anima cada una por separado
         self._lienzo = QWidget()
-        self._lienzo.setFixedHeight(436)
+        self._lienzo.setFixedHeight(TARJETA_H)
         fila.addWidget(self._lienzo, 0, Qt.AlignTop)
         fila.addStretch(1)
+        self.btn_lote = _boton("ENVIAR TODAS (0)", 170, 34)
+        self.btn_lote.clicked.connect(self._enviar_todas)
+        self.btn_lote.setEnabled(False)
+        fila.addWidget(self.btn_lote, 0, Qt.AlignTop)
         agregar = _boton("+ Añadir par", 120, 34)
         agregar.clicked.connect(self._añadir_par)
         fila.addWidget(agregar, 0, Qt.AlignTop)
@@ -277,7 +285,7 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
         return deck
 
     def _paso(self):
-        return self.TARJETA_W + self.TARJETA_GAP
+        return TARJETA_W + self.TARJETA_GAP
 
     def _ubicar(self, animar=True, saltar=None):
         """Coloca cada tarjeta en su slot (animando si se pide)."""
@@ -316,7 +324,7 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
         for carta in self._cartas:
             if carta is tarjeta:
                 continue
-            if centro > indice * paso + self.TARJETA_W // 2:
+            if centro > indice * paso + TARJETA_W // 2:
                 indice += 1
             else:
                 break
@@ -471,6 +479,9 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
             elif tipo == "orders":
                 self._ordenes = mensaje[1]
                 self._pintar_ordenes(self._ordenes)
+            elif tipo == "lote":
+                # un solo aviso para todo el lote; nunca un modal por orden
+                self._lote_terminado(mensaje[1])
             elif tipo in ("status", "closed"):
                 self._mostrar_estado(mensaje[1])
             elif tipo == "notice":
@@ -600,6 +611,7 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
                     on_broker=self._cambio_broker,
                     on_arrastre=self._arrastre_tarjeta,
                     estado_mercado=self._estado_mercado,
+                    on_lado=lambda _carta: self._actualizar_boton_lote(),
                 )
                 widget.setParent(self._lienzo)
                 widget.show()
@@ -617,6 +629,7 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
         self._arrastrada = None
         self._destino = None
         self._ubicar(animar=False)
+        self._actualizar_boton_lote()
 
     def _cambio_broker(self, tarjeta, nombre):
         ident = tarjeta.tarjeta["id"]
@@ -632,6 +645,7 @@ class VistaQt(PestanaCalendario, TablaPosiciones, TablaOrdenes, TablaHistorial, 
             self._cartas = [c for c in self._cartas if c is not widget]
             widget.hide()
             widget.deleteLater()
+            self._actualizar_boton_lote()
 
 
 def build_main_window():

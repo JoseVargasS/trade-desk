@@ -56,6 +56,10 @@ CAL_COLS = (
 ROW_H = 56
 ACTION_W = 200
 
+# Tarjeta del deck: lleva la fila "Lote" entre los inputs y los botones
+TARJETA_W = 286
+TARJETA_H = 468
+
 # Pestaña Calendario: medidas de las celdas y ancho del panel de métricas
 CAL_ALTO_DIA = 48
 CAL_ANCHO_DIA = 88
