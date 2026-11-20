@@ -314,17 +314,60 @@ def test_poller_secundario_mantiene_cadencias_fuera_del_ticker(monkeypatch):
     app.ver_historial = True
     llamadas = []
     monkeypatch.setattr(session_module.time, "monotonic", lambda: 1000.0)
-    monkeypatch.setattr(session_module, "SALDOS_SEG", 0)
     monkeypatch.setattr(session_module, "FONDOS_SEG", 0)
     monkeypatch.setattr(session_module, "IP_SEG", 0)
     app.cargar_historial = lambda: llamadas.append("historial")
-    app.refresh_saldos = lambda: llamadas.append("saldos")
     app.refresh_fondos = lambda: llamadas.append("funding")
     app._cargar_ip = lambda: llamadas.append("ip")
 
     app._poll_secundario()
 
-    assert llamadas == ["historial", "saldos", "funding", "ip"]
+    assert llamadas == ["historial", "funding", "ip"]
+
+
+def test_poller_secundario_avisa_y_sigue_si_una_tarea_falla(monkeypatch):
+    """Antes una excepción suelta mataba el hilo y congelaba funding e IP."""
+    app = _session()
+    app.ver_historial = False
+    app.log = lambda _mensaje: None
+    monkeypatch.setattr(session_module, "FONDOS_SEG", 0)
+    monkeypatch.setattr(session_module, "IP_SEG", 60)
+    app.refresh_fondos = lambda: (_ for _ in ()).throw(RuntimeError("funding roto"))
+    app._cargar_ip = lambda: None
+
+    app._poll_secundario()
+
+    assert app.q.get_nowait() == ("error", "tareas secundarias: funding roto")
+
+
+def test_el_ciclo_de_cuenta_refresca_los_saldos_en_cada_vuelta():
+    """La cabecera se mueve con el PnL de las posiciones: saldos cada 3 s."""
+    app = _session()
+    app.ultimas_posiciones = []
+    app.posiciones_todas = lambda: []
+    app.ordenes_todas = lambda: []
+    llamadas = []
+    app.refresh_saldos = lambda: llamadas.append("saldos")
+
+    app._poll_cuenta()
+
+    assert llamadas == ["saldos"]
+    assert app._parar.delays[0] <= session_module.POSICIONES_SEG
+
+
+def test_un_fallo_de_saldos_no_mata_el_ciclo_de_cuenta():
+    app = _session()
+    app.ultimas_posiciones = []
+    app.posiciones_todas = lambda: []
+    app.ordenes_todas = lambda: []
+    app.refresh_saldos = lambda: (_ for _ in ()).throw(RuntimeError("sin saldo"))
+
+    app._poll_cuenta()
+
+    mensajes = []
+    while not app.q.empty():
+        mensajes.append(app.q.get_nowait())
+    assert ("error", "saldos: sin saldo") in mensajes
 
 
 def test_start_crea_workers_independientes(monkeypatch):

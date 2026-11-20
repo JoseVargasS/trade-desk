@@ -30,7 +30,6 @@ PRECIO_MAX_EDAD = 5.0
 BROKERS = ("mexc", "bitunix", "bingx")
 POSICIONES_SEG = 3.0
 HISTORIAL_SEG = 15.0
-SALDOS_SEG = 15.0
 IP_SEG = 900.0
 HISTORIAL_PAGINA = 50
 FONDOS_SEG = 60.0
@@ -603,7 +602,11 @@ class Session(CuentaMixin):
             self._parar.wait(espera)
 
     def _poll_cuenta(self):
-        """Actualiza posiciones y órdenes sin frenar el hilo de precios."""
+        """Actualiza posiciones, órdenes y saldos sin frenar el hilo de precios.
+
+        Los saldos van en este ciclo (3 s) y no en el secundario: la cabecera
+        tiene que moverse con el PnL de las posiciones abiertas.
+        """
         proximo = 0.0
         espera = POSICIONES_SEG
         while not self._parar.is_set():
@@ -624,35 +627,40 @@ class Session(CuentaMixin):
                 except Exception as exc:
                     fallo = True
                     self.q.put(("error", f"órdenes: {exc}"))
+                try:
+                    self.refresh_saldos()
+                except Exception as exc:
+                    self.q.put(("error", f"saldos: {exc}"))
                 espera = min(5.0, espera * 2) if fallo else POSICIONES_SEG
                 proximo = ahora + espera
             self._parar.wait(max(0.0, proximo - time.monotonic()))
 
     def _poll_secundario(self):
-        """Ejecuta historial, saldos, funding e IP fuera del ciclo caliente."""
+        """Ejecuta historial, funding e IP fuera del ciclo caliente.
+
+        El cuerpo va envuelto: si una tarea lanza algo inesperado, se avisa y el
+        ciclo sigue; antes el hilo moría y el funding y la IP se congelaban.
+        """
         proximo_hist = 0.0
-        proximo_saldos = time.monotonic() + SALDOS_SEG
         proximo_fondos = time.monotonic() + FONDOS_SEG
         proximo_ip = time.monotonic() + IP_SEG
         while not self._parar.is_set():
-            ahora = time.monotonic()
-            if self.ver_historial and ahora >= proximo_hist:
-                proximo_hist = ahora + HISTORIAL_SEG
-                try:
+            try:
+                ahora = time.monotonic()
+                if self.ver_historial and ahora >= proximo_hist:
+                    proximo_hist = ahora + HISTORIAL_SEG
                     self.cargar_historial()
-                except Exception as exc:
-                    self.q.put(("error", f"historial: {exc}"))
-            if ahora >= proximo_saldos:
-                proximo_saldos = ahora + SALDOS_SEG
-                self.refresh_saldos()
-            if ahora >= proximo_fondos:
-                proximo_fondos = ahora + FONDOS_SEG
-                self.refresh_fondos()
-            if ahora >= proximo_ip:
-                # la IP cambia (o el ISP la rota): se revalida cada 15 min
-                proximo_ip = ahora + IP_SEG
-                self._cargar_ip()
-            siguiente = min(proximo_saldos, proximo_fondos, proximo_ip)
+                if ahora >= proximo_fondos:
+                    proximo_fondos = ahora + FONDOS_SEG
+                    self.refresh_fondos()
+                if ahora >= proximo_ip:
+                    # la IP cambia (o el ISP la rota): se revalida cada 15 min
+                    proximo_ip = ahora + IP_SEG
+                    self._cargar_ip()
+            except Exception as exc:
+                self.log(f"ERR tareas secundarias: {type(exc).__name__}")
+                self.q.put(("error", f"tareas secundarias: {exc}"))
+            siguiente = min(proximo_fondos, proximo_ip)
             if self.ver_historial:
                 siguiente = min(siguiente, proximo_hist)
             self._parar.wait(min(0.5, max(0.0, siguiente - time.monotonic())))

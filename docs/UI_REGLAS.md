@@ -115,7 +115,8 @@
   disponibilidad por broker y no convierte símbolos alternativos automáticamente.
 - La cabecera muestra el **USDT disponible de cada broker** con su **wordmark** (`logo(nombre,
   13, completo=True)`), el número y el `USDT` en 13 px **negrita**, separados por
-  un `·`; cada 15 s. La lista sale de `BROKERS` y `TITULOS` en `qt/ventana.py`, así sumar un broker
+  un `·`; cada 3 s, en el mismo ciclo que las posiciones. La lista sale de `BROKERS` y
+  `TITULOS` en `qt/ventana.py`, así sumar un broker
   es una línea. **El número es el saldo en vivo de la cuenta, con el PnL no realizado
   dentro** (el usuario lo quiere ver moverse con las posiciones): MEXC `equity`, Bitunix
   `available + margin + frozen`, BingX `equity`. `available()` sigue devolviendo lo libre y

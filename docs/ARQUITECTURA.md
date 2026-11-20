@@ -92,15 +92,15 @@ _cargar_tarjetas ─► contratos/precios iniciales y saldos
 _cargar_catalogo ─► ("markets", ...), disponibilidad por broker (solo futuros)
 _cargar_ip       ─► ("ip", ...)                   IP inicial
 _poll(broker)    ─► ("ticker", ...)               un hilo por broker, rota tarjetas cada 0,70 s
-_poll_cuenta     ─► ("positions", ...), ("orders", ...) cada 3 s en estado normal
-_poll_secundario ─► historial (15 s, solo en su pestaña), saldos (15 s),
-                    funding (60 s) e IP (900 s); tareas secuenciales en este worker
+_poll_cuenta     ─► ("positions", ...), ("orders", ...) y saldos, cada 3 s en estado normal
+_poll_secundario ─► historial (15 s, solo en su pestaña), funding (60 s)
+                    e IP (900 s); tareas secuenciales en este worker
 ```
 
 Cada broker tiene su propio hilo de precios (`_poll("mexc")`, `_poll("bitunix")`,
 `_poll("bingx")`), así que una consulta colgada o un backoff afectan solo a ese broker
-y no congelan los precios de los demás. Dentro de `_poll_cuenta`, posiciones y órdenes se
-consultan en secuencia; dentro de `_poll_secundario`, historial, saldos, funding e IP también.
+y no congelan los precios de los demás. Dentro de `_poll_cuenta`, posiciones, órdenes y
+saldos se consultan en secuencia; dentro de `_poll_secundario`, historial, funding e IP.
 Los tickers son públicos: `_poll` usa el cliente de mercado aunque no haya API key. `Session.cliente()`
 sigue reservado para operaciones privadas que requieren credenciales.
 El índice de `_poll` persiste entre vueltas para que cada tarjeta del broker reciba su ticker;
